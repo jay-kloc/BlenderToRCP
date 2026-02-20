@@ -9,6 +9,9 @@ import json
 import subprocess
 import time
 import tempfile
+import errno
+import re
+import signal
 from pathlib import Path
 
 import bpy
@@ -142,6 +145,10 @@ class BLENDERTORCP_OT_bake_export_background(Operator, ExportHelper):
         settings.background_job_dir = str(job_dir)
         settings.background_job_pid = proc.pid
         _store_last_export_settings(context, settings)
+        try:
+            bpy.ops.blendertorcp.watch_bake_export_job('INVOKE_DEFAULT')
+        except Exception:
+            pass
 
         self.report({'INFO'}, f"Background export started (PID {proc.pid}).")
         return {'FINISHED'}
@@ -194,6 +201,155 @@ class BLENDERTORCP_OT_clear_bake_job(Operator):
         settings.background_job_pid = 0
         self.report({'INFO'}, "Cleared background job state.")
         return {'FINISHED'}
+
+
+class BLENDERTORCP_OT_watch_bake_export_job(Operator):
+    """Modal watcher that keeps the panel refreshed and handles timeout/failure detection."""
+    bl_idname = "blendertorcp.watch_bake_export_job"
+    bl_label = "Watch Bake Export Job"
+    bl_options = {'INTERNAL'}
+
+    _timer = None
+
+    def invoke(self, context, event):
+        settings = context.scene.blender_to_rcp_export_settings
+        if not getattr(settings, "background_job_dir", ""):
+            return {'CANCELLED'}
+        wm = context.window_manager
+        self._timer = wm.event_timer_add(0.5)
+        wm.modal_handler_add(self)
+        return {'RUNNING_MODAL'}
+
+    def modal(self, context, event):
+        if event.type != 'TIMER':
+            return {'PASS_THROUGH'}
+
+        settings = context.scene.blender_to_rcp_export_settings
+        job_dir = getattr(settings, "background_job_dir", "")
+        if not job_dir:
+            self._stop(context)
+            return {'CANCELLED'}
+
+        status_path = Path(job_dir) / "status.json"
+        status = _read_job_status(job_dir) or {}
+        state = status.get("state")
+        pid = int(getattr(settings, "background_job_pid", 0))
+
+        _tag_export_ui_redraw()
+
+        if state in {"done", "error", "canceled"}:
+            settings.background_job_pid = 0
+            self._stop(context)
+            return {'FINISHED'}
+
+        if pid > 0 and not _pid_is_running(pid):
+            _write_status(
+                status_path,
+                state="error",
+                progress=1.0,
+                message="Background job exited unexpectedly.",
+                export_path=status.get("export_path") or getattr(settings, "filepath", ""),
+            )
+            settings.background_job_pid = 0
+            _tag_export_ui_redraw()
+            self._stop(context)
+            return {'FINISHED'}
+
+        timeout_seconds = int(getattr(settings, "bake_step_timeout_seconds", 0) or 0)
+        if timeout_seconds > 0 and state in {"queued", "running"} and pid > 0:
+            step_elapsed = _extract_step_elapsed_seconds(status)
+            if step_elapsed is not None and step_elapsed >= timeout_seconds:
+                _terminate_process(pid)
+                _write_status(
+                    status_path,
+                    state="error",
+                    progress=1.0,
+                    message=f"Timed out after {timeout_seconds}s in one step; background job canceled.",
+                    export_path=status.get("export_path") or getattr(settings, "filepath", ""),
+                )
+                settings.background_job_pid = 0
+                _tag_export_ui_redraw()
+                self._stop(context)
+                return {'FINISHED'}
+
+        return {'PASS_THROUGH'}
+
+    def cancel(self, context):
+        self._stop(context)
+
+    def _stop(self, context):
+        if self._timer is not None:
+            try:
+                context.window_manager.event_timer_remove(self._timer)
+            except Exception:
+                pass
+            self._timer = None
+
+
+def _tag_export_ui_redraw() -> None:
+    for wm in bpy.data.window_managers:
+        for window in wm.windows:
+            screen = getattr(window, "screen", None)
+            if screen is None:
+                continue
+            for area in screen.areas:
+                if area.type != 'VIEW_3D':
+                    continue
+                area.tag_redraw()
+                for region in area.regions:
+                    if region.type in {'UI', 'WINDOW'}:
+                        region.tag_redraw()
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError as exc:
+        if exc.errno == errno.EPERM:
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def _terminate_process(pid: int) -> None:
+    if pid <= 0:
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except Exception:
+        return
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        if not _pid_is_running(pid):
+            return
+        time.sleep(0.1)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except Exception:
+        pass
+
+
+def _extract_step_elapsed_seconds(status: dict) -> int | None:
+    if not isinstance(status, dict):
+        return None
+    raw = status.get("step_elapsed_seconds")
+    if raw is not None:
+        try:
+            return int(raw)
+        except Exception:
+            pass
+    message = str(status.get("message") or "")
+    match = re.search(r"\((\d+)s\)", message)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except Exception:
+        return None
 
 
 
@@ -319,7 +475,9 @@ def _write_status(
     if export_path:
         payload["export_path"] = export_path
     try:
-        path.write_text(json.dumps(payload, indent=2))
+        tmp_path = path.with_suffix(".json.tmp")
+        tmp_path.write_text(json.dumps(payload, indent=2))
+        tmp_path.replace(path)
     except Exception:
         pass
 
@@ -352,6 +510,7 @@ def _restore_mode(context, active, mode: str) -> None:
 
 def register():
     bpy.utils.register_class(BLENDERTORCP_OT_bake_export_background)
+    bpy.utils.register_class(BLENDERTORCP_OT_watch_bake_export_job)
     bpy.utils.register_class(BLENDERTORCP_OT_cancel_bake_export)
     bpy.utils.register_class(BLENDERTORCP_OT_clear_bake_job)
 
@@ -359,4 +518,5 @@ def register():
 def unregister():
     bpy.utils.unregister_class(BLENDERTORCP_OT_clear_bake_job)
     bpy.utils.unregister_class(BLENDERTORCP_OT_cancel_bake_export)
+    bpy.utils.unregister_class(BLENDERTORCP_OT_watch_bake_export_job)
     bpy.utils.unregister_class(BLENDERTORCP_OT_bake_export_background)

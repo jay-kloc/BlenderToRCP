@@ -142,6 +142,22 @@ def extract_blender_material_data(material) -> Dict[str, Any]:
         if material.blend_method in {'CLIP', 'HASHED'}:
             data['alpha_threshold'] = material.alpha_threshold
 
+        # Bake & Export can author AO as a baked texture without wiring it into the
+        # Principled node graph. In that case we read it from custom properties.
+        try:
+            baked_ao = material.get("blender_to_rcp_ao_texture")
+        except Exception:
+            baked_ao = None
+        if isinstance(baked_ao, str) and baked_ao:
+            data['ao_texture'] = baked_ao
+            try:
+                baked_uv = material.get("blender_to_rcp_ao_uv")
+            except Exception:
+                baked_uv = None
+            if isinstance(baked_uv, str) and baked_uv:
+                data['ao_texture_texcoord'] = _normalize_uv_map_name(baked_uv)
+            data['ao_texture_colorspace'] = 'Non-Color'
+
         texture_map = {
             'Base Color': 'base_color_texture',
             'Metallic': 'metallic_texture',

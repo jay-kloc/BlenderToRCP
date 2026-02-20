@@ -12,6 +12,7 @@ import sys
 import traceback
 from pathlib import Path
 import time
+import threading
 
 import bpy
 
@@ -39,6 +40,7 @@ def _update_status(
     message: str | None = None,
     log_path: str | None = None,
     export_path: str | None = None,
+    step_elapsed_seconds: int | None = None,
 ) -> None:
     payload = {
         "state": state,
@@ -52,10 +54,84 @@ def _update_status(
         payload["log_path"] = log_path
     if export_path:
         payload["export_path"] = export_path
+    if step_elapsed_seconds is not None:
+        payload["step_elapsed_seconds"] = int(step_elapsed_seconds)
     try:
-        status_path.write_text(json.dumps(payload, indent=2))
+        tmp_path = status_path.with_suffix(".json.tmp")
+        tmp_path.write_text(json.dumps(payload, indent=2))
+        tmp_path.replace(status_path)
     except Exception:
         pass
+
+
+class _BakeProgressReporter:
+    """Tracks bake progress and emits heartbeat updates while bake ops are running."""
+
+    def __init__(self, status_path: Path, export_path: str | None):
+        self.status_path = status_path
+        self.export_path = export_path
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._thread = None
+        self._progress = 0.0
+        self._message = "Preparing bake"
+        self._step_started = time.time()
+        self._tick = 0
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._run, name="BakeProgressHeartbeat", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join()
+        self._thread = None
+
+    def update(self, progress: float, message: str) -> None:
+        now = time.time()
+        with self._lock:
+            self._progress = max(0.0, min(1.0, float(progress)))
+            if message and message != self._message:
+                self._message = message
+                self._step_started = now
+                self._tick = 0
+        self._emit(heartbeat=False)
+
+    def _emit(self, heartbeat: bool) -> None:
+        if self._stop_event.is_set():
+            return
+        with self._lock:
+            progress = self._progress
+            message = self._message
+            step_started = self._step_started
+            tick = self._tick
+
+        if heartbeat and message:
+            elapsed = int(max(0.0, time.time() - step_started))
+            dots = "." * ((tick % 3) + 1)
+            display = f"{message} ({elapsed}s){dots}"
+        else:
+            display = message
+            elapsed = int(max(0.0, time.time() - step_started))
+
+        _update_status(
+            self.status_path,
+            "running",
+            progress,
+            display,
+            export_path=self.export_path,
+            step_elapsed_seconds=elapsed,
+        )
+
+    def _run(self) -> None:
+        while not self._stop_event.wait(1.0):
+            with self._lock:
+                self._tick += 1
+            self._emit(heartbeat=True)
 
 
 def _apply_settings(scene_settings, data: dict) -> None:
@@ -155,22 +231,23 @@ def main() -> int:
     original_force_unlit = getattr(scene_settings, "force_unlit_materials", False)
 
     bake_result = None
+    progress_reporter = None
 
     try:
         bake_ops._ensure_object_mode(bpy.context)
         bake_ops._set_render_engine(bpy.context.scene, 'CYCLES')
 
         texture_dir = Path(export_path).parent / "textures"
-        def _bake_progress(progress, message):
-            _update_status(
-                status_path,
-                "running",
-                0.15 + (0.35 * float(progress)),
-                message,
-                export_path=payload.get("export_path"),
-            )
+        progress_reporter = _BakeProgressReporter(status_path, payload.get("export_path"))
+        progress_reporter.start()
 
-        _update_status(status_path, "running", 0.15, "Baking textures", export_path=payload.get("export_path"))
+        def _set_running_stage(progress: float, message: str) -> None:
+            progress_reporter.update(max(0.0, min(1.0, float(progress))), message)
+
+        def _bake_progress(progress: float, message: str) -> None:
+            _set_running_stage(0.15 + (0.35 * max(0.0, min(1.0, float(progress)))), message)
+
+        _set_running_stage(0.15, "Baking textures")
         bake_result = bake_textures.bake_materials_for_objects(
             bpy.context,
             scene_settings,
@@ -180,11 +257,13 @@ def main() -> int:
             progress_callback=_bake_progress,
         )
 
+        # Bake & Export always authors Unlit materials.
         scene_settings.force_unlit_materials = True
 
         if getattr(scene_settings, "selected_objects_only", False):
             bake_ops._set_selection(bpy.context, objects_to_export)
 
+        _set_running_stage(0.5, "Validating materials")
         materials = bake_ops._collect_materials_from_objects(objects_to_export)
         for material in materials:
             try:
@@ -197,6 +276,7 @@ def main() -> int:
                 result["ok"] = not result["errors"]
             if result["errors"]:
                 error_count = len(result["errors"])
+                progress_reporter.stop()
                 _update_status(
                     status_path,
                     "error",
@@ -206,7 +286,7 @@ def main() -> int:
                 )
                 return 1
 
-        _update_status(status_path, "running", 0.55, "Exporting USD", export_path=payload.get("export_path"))
+        _set_running_stage(0.55, "Exporting USD")
         temp_usd_path = blender_usd_export.export_blender_scene(
             bpy.context,
             scene_settings,
@@ -214,10 +294,11 @@ def main() -> int:
             diag,
         )
         if not temp_usd_path or not Path(temp_usd_path).exists():
+            progress_reporter.stop()
             _update_status(status_path, "error", 1.0, "Blender USD export failed", export_path=payload.get("export_path"))
             return 1
 
-        _update_status(status_path, "running", 0.7, "Rewriting materials (Unlit)", export_path=payload.get("export_path"))
+        _set_running_stage(0.7, "Rewriting materials (Unlit)")
         postprocess_usd.process_usd_stage(
             temp_usd_path,
             scene_settings,
@@ -226,11 +307,12 @@ def main() -> int:
         )
 
         if diag.data.get("errors"):
+            progress_reporter.stop()
             _update_status(status_path, "error", 1.0, "Postprocess failed; see diagnostics", export_path=payload.get("export_path"))
             return 1
 
         if scene_settings.export_format == "USDZ":
-            _update_status(status_path, "running", 0.85, "Packaging USDZ", export_path=payload.get("export_path"))
+            _set_running_stage(0.85, "Packaging USDZ")
             pack_usdz.create_usdz(
                 temp_usd_path,
                 export_path,
@@ -243,15 +325,20 @@ def main() -> int:
             if temp_usd_path != export_path:
                 shutil.move(temp_usd_path, export_path)
 
+        progress_reporter.stop()
         _update_status(status_path, "done", 1.0, "Bake & Export complete", str(log_path), export_path)
         return 0
 
     except Exception as exc:
+        if progress_reporter is not None:
+            progress_reporter.stop()
         _update_status(status_path, "error", 1.0, f"Exception: {exc}", export_path=payload.get("export_path"))
         print("Bake export error:", exc)
         traceback.print_exc()
         return 1
     finally:
+        if progress_reporter is not None:
+            progress_reporter.stop()
         scene_settings.force_unlit_materials = original_force_unlit
         try:
             bpy.context.scene.render.engine = original_engine

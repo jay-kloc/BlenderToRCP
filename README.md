@@ -8,7 +8,7 @@ Blender add-on to export USD/USDZ and rewrite Blender materials into Reality Com
 - RealityKit material rewrite: converts supported Blender shader graphs into MaterialX graphs that Reality Composer Pro can edit.
 - Portable exports: stages texture/assets next to the USD and rewrites all asset paths to be relative.
 - Animation compatibility: concatenates actions for export and can author Reality Composer Pro animation clips.
-- Bake & Export (background): bakes textures and exports an Unlit material workflow without blocking Blender's UI.
+- Bake & Export (background): Unlit-only bake pipeline (base color + optional opacity), optional Lit (IBL baked) color pass, asynchronous background execution, and step-level status/timeout controls.
 
 ## Important note
 This is the first version of BlenderToRCP and node/graph support is intentionally limited.

@@ -364,6 +364,68 @@ class BlenderToRCPExportSettings(PropertyGroup):
         update=_on_settings_changed,
     )
 
+    bake_mode: EnumProperty(
+        name="Bake Mode",
+        description="Choose whether baked textures are light-independent (albedo) or include lighting from an IBL",
+        items=[
+            ('UNLIT_ALBEDO', "Unlit (Albedo)", "Bake light-independent albedo (recommended)"),
+            ('LIT_IBL', "Lit (IBL baked)", "Bake combined appearance under an IBL and export as Unlit"),
+        ],
+        default='UNLIT_ALBEDO',
+        update=_on_settings_changed,
+    )
+
+    bake_ibl_source: EnumProperty(
+        name="IBL Source",
+        description="Select which Image Based Light (IBL) is used for lit baking",
+        items=[
+            ('SCENE_WORLD', "Use Scene World", "Use the current scene World as the IBL"),
+            ('HDRI_FILE', "Override HDRI File", "Use a specific HDRI file for the IBL bake"),
+        ],
+        default='SCENE_WORLD',
+        update=_on_settings_changed,
+    )
+
+    bake_ibl_filepath: StringProperty(
+        name="HDRI File",
+        description="HDRI file used for lit (IBL baked) mode",
+        default="",
+        maxlen=1024,
+        subtype='FILE_PATH',
+        update=_on_settings_changed,
+    )
+
+    bake_ibl_strength: FloatProperty(
+        name="IBL Strength",
+        description="IBL strength multiplier",
+        default=1.0,
+        min=0.0,
+        update=_on_settings_changed,
+    )
+
+    bake_ibl_rotation: FloatProperty(
+        name="IBL Rotation",
+        description="Z rotation for the IBL",
+        default=0.0,
+        subtype='ANGLE',
+        update=_on_settings_changed,
+    )
+
+    bake_isolate_meshes_lit: BoolProperty(
+        name="Isolate Meshes (Lit)",
+        description="In Lit (IBL baked) mode, hide other meshes while baking each mesh to avoid cross-mesh shadows",
+        default=False,
+        update=_on_settings_changed,
+    )
+
+    bake_step_timeout_seconds: IntProperty(
+        name="Step Timeout (sec)",
+        description="Abort background bake/export if a single step exceeds this duration (0 = disabled)",
+        default=0,
+        min=0,
+        update=_on_settings_changed,
+    )
+
     bake_resolution: EnumProperty(
         name="Bake Resolution",
         description="Resolution for baked textures",
@@ -700,12 +762,24 @@ class BLENDERTORCP_PT_export_bake_settings(Panel):
 
         settings = context.scene.blender_to_rcp_export_settings
         layout.enabled = not _is_job_running(settings)
+        color_box = layout.box()
+        color_box.label(text="Color Bake")
+        color_box.prop(settings, "bake_mode")
+        if settings.bake_mode == 'LIT_IBL':
+            color_box.prop(settings, "bake_ibl_source")
+            if settings.bake_ibl_source == 'HDRI_FILE':
+                color_box.prop(settings, "bake_ibl_filepath")
+                color_box.prop(settings, "bake_ibl_strength")
+                color_box.prop(settings, "bake_ibl_rotation")
+            color_box.prop(settings, "bake_isolate_meshes_lit")
+
         layout.prop(settings, "bake_resolution")
         if settings.bake_resolution == 'CUSTOM':
             layout.prop(settings, "bake_resolution_custom")
         layout.prop(settings, "bake_margin")
         layout.prop(settings, "bake_base_color")
         layout.prop(settings, "bake_opacity")
+        layout.prop(settings, "bake_step_timeout_seconds")
         layout.prop(settings, "bake_keep_materials")
 
 
@@ -821,10 +895,14 @@ def _read_background_job_status(settings):
         return None
     status_path = Path(job_dir) / "status.json"
     if not status_path.exists():
+        if int(getattr(settings, "background_job_pid", 0)) > 0:
+            return {"state": "running", "message": "Waiting for status file..."}
         return None
     try:
         data = json.loads(status_path.read_text())
     except Exception:
+        if int(getattr(settings, "background_job_pid", 0)) > 0:
+            return {"state": "running", "message": "Reading status..."}
         return None
     return data
 

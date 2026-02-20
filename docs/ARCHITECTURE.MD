@@ -50,7 +50,8 @@ Runner behavior (`Plugin/bake_export_runner.py`):
 - Ensures the add-on is enabled.
 - Applies serialized settings from `settings.json`.
 - Bakes textures to `<export_dir>/textures` using `Plugin/export/bake_textures.py`.
-- Forces an Unlit rewrite for exported materials.
+- In `Lit (IBL baked)` mode, an optional isolation toggle hides non-target meshes per bake pass to avoid cross-mesh shadow contribution.
+- Rewrites exported materials as Unlit for Bake & Export.
 - Runs the normal USD export + postprocess pipeline.
 
 ### 2) Animation preparation (optional)

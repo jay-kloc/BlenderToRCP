@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List, Optional
 import re
+from contextlib import contextmanager
 
 import bpy
 
@@ -35,19 +36,26 @@ def bake_materials_for_objects(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    bake_mode = str(getattr(settings, "bake_mode", "UNLIT_ALBEDO") or "UNLIT_ALBEDO")
+    if bake_mode not in {"UNLIT_ALBEDO", "LIT_IBL"}:
+        bake_mode = "UNLIT_ALBEDO"
+
     resolution = _resolve_bake_resolution(settings)
     margin = int(getattr(settings, "bake_margin", 8))
     bake_base = bool(getattr(settings, "bake_base_color", True))
     bake_opacity = bool(getattr(settings, "bake_opacity", True))
+    isolate_meshes_lit = bool(getattr(settings, "bake_isolate_meshes_lit", False))
 
     mesh_objects = [obj for obj in objects if getattr(obj, "type", None) == 'MESH']
     total_steps = 0
     if mesh_objects:
         for obj in mesh_objects:
             has_materials = any(slot.material for slot in obj.material_slots)
-            if bake_base and has_materials:
+            if not has_materials:
+                continue
+            if bake_base:
                 total_steps += 1
-            if bake_opacity and has_materials:
+            if bake_opacity:
                 total_steps += 1
     if total_steps <= 0:
         total_steps = 1
@@ -60,133 +68,288 @@ def bake_materials_for_objects(
             except Exception:
                 pass
 
-    for obj in mesh_objects:
-        if obj.type != 'MESH':
-            continue
+    def _start_step(message: str) -> None:
+        label = f"Step {completed_steps + 1}/{total_steps} - {message}"
+        _report_progress(label)
 
-        uv_layer_name = _get_active_uv(obj)
-        if not uv_layer_name:
-            msg = f"Bake failed: '{obj.name}' has no UV map."
-            if diagnostics:
-                diagnostics.add_error(msg)
-            raise RuntimeError(msg)
+    def _finish_step(message: str) -> None:
+        nonlocal completed_steps
+        completed_steps += 1
+        _report_progress(f"Done {completed_steps}/{total_steps} - {message}")
 
-        original_mats = [slot.material for slot in obj.material_slots]
-        result.original_materials[obj] = original_mats
+    color_bake_type = 'DIFFUSE'
+    color_pass_filter = {'COLOR'}
+    if bake_mode == "LIT_IBL":
+        color_bake_type = 'COMBINED'
+        color_pass_filter = None
 
-        baked_entries = []
-        for slot_index, slot in enumerate(obj.material_slots):
-            source_mat = slot.material
-            if not source_mat:
-                baked_entries.append(None)
-                continue
+    with _temporary_ibl_world(context, settings, diagnostics, enabled=(bake_mode == "LIT_IBL")):
+        mesh_count = len(mesh_objects)
+        for mesh_index, obj in enumerate(mesh_objects, start=1):
+            uv_layer_name = _get_active_uv(obj)
+            if not uv_layer_name:
+                msg = f"Bake failed: '{obj.name}' has no UV map."
+                if diagnostics:
+                    diagnostics.add_error(msg)
+                raise RuntimeError(msg)
 
-            baked_mat = source_mat.copy()
-            baked_mat.use_nodes = True
-            baked_mat.name = _unique_name(f"{source_mat.name}_Baked", bpy.data.materials)
-            if not source_mat.use_nodes:
-                _initialize_simple_material(baked_mat, source_mat)
-            slot.material = baked_mat
-            result.baked_materials.append(baked_mat)
+            _report_progress(f"Preparing bake targets [{mesh_index}/{mesh_count}] - {obj.name}")
 
-            entry = {
-                "material": baked_mat,
-                "base_image": None,
-                "opacity_image": None,
-                "use_opacity": _material_needs_opacity(source_mat),
-                "uv_layer": uv_layer_name,
-                "slot_index": slot_index,
-            }
+            original_mats = [slot.material for slot in obj.material_slots]
+            result.original_materials[obj] = original_mats
 
-            if bake_base:
-                base_image_path = _make_image_path(
-                    output_dir,
-                    obj.name,
-                    baked_mat.name,
-                    "baseColor",
-                    ".png",
-                )
-                base_image = _create_bake_image(
-                    name=f"{obj.name}_{baked_mat.name}_baseColor",
-                    filepath=base_image_path,
-                    width=resolution,
-                    height=resolution,
-                    colorspace="sRGB",
-                )
-                entry["base_image"] = base_image
-                result.baked_images.append(base_image)
-                _set_active_image_node(baked_mat, base_image, uv_layer_name)
-
-            baked_entries.append(entry)
-
-        has_materials = any(entry for entry in baked_entries)
-        has_base_targets = any(entry and entry.get("base_image") for entry in baked_entries)
-        if bake_base and has_base_targets:
-            _report_progress(f"Baking base color: {obj.name}")
-            _select_object(context, obj)
-            _bake_object_pass(
-                context,
-                obj,
-                bake_type='DIFFUSE',
-                pass_filter={'COLOR'},
-                margin=margin,
-            )
-            completed_steps += 1
-            for entry in baked_entries:
-                if not entry or not entry.get("base_image"):
+            baked_entries = []
+            for slot in obj.material_slots:
+                source_mat = slot.material
+                if not source_mat:
+                    baked_entries.append(None)
                     continue
-                entry["base_image"].save()
 
-        if bake_opacity and has_materials:
-            _report_progress(f"Baking opacity: {obj.name}")
+                baked_mat = source_mat.copy()
+                baked_mat.use_nodes = True
+                baked_mat.name = _unique_name(f"{source_mat.name}_Baked", bpy.data.materials)
+                if not source_mat.use_nodes:
+                    _initialize_simple_material(baked_mat, source_mat)
+                slot.material = baked_mat
+                result.baked_materials.append(baked_mat)
+
+                entry = {
+                    "material": baked_mat,
+                    "base_image": None,
+                    "opacity_image": None,
+                    "use_opacity": _material_needs_opacity(source_mat),
+                    "uv_layer": uv_layer_name,
+                }
+
+                if bake_base:
+                    base_image_path = _make_image_path(
+                        output_dir,
+                        obj.name,
+                        baked_mat.name,
+                        "baseColor",
+                        ".png",
+                    )
+                    base_image = _create_bake_image(
+                        name=f"{obj.name}_{baked_mat.name}_baseColor",
+                        filepath=base_image_path,
+                        width=resolution,
+                        height=resolution,
+                        colorspace="sRGB",
+                    )
+                    entry["base_image"] = base_image
+                    result.baked_images.append(base_image)
+                    _set_active_image_node(baked_mat, base_image, uv_layer_name)
+
+                baked_entries.append(entry)
+
+            has_materials = any(entry for entry in baked_entries)
+            has_base_targets = any(entry and entry.get("base_image") for entry in baked_entries)
+            isolate_meshes = bake_mode == "LIT_IBL" and isolate_meshes_lit
+
+            with _temporary_mesh_isolation(context, obj, enabled=isolate_meshes):
+                if bake_base and has_base_targets:
+                    label = "Baking base color" if bake_mode == "UNLIT_ALBEDO" else "Baking lit (IBL)"
+                    step_message = f"{label} [{mesh_index}/{mesh_count}] - {obj.name}"
+                    _start_step(step_message)
+                    _select_object(context, obj)
+                    _bake_object_pass(
+                        context,
+                        obj,
+                        bake_type=color_bake_type,
+                        pass_filter=color_pass_filter,
+                        margin=margin,
+                    )
+                    for entry in baked_entries:
+                        if not entry or not entry.get("base_image"):
+                            continue
+                        entry["base_image"].save()
+                    _finish_step(step_message)
+
+                if bake_opacity and has_materials:
+                    step_message = f"Baking opacity [{mesh_index}/{mesh_count}] - {obj.name}"
+                    _start_step(step_message)
+                    for entry in baked_entries:
+                        if not entry:
+                            continue
+                        baked_mat = entry["material"]
+                        opacity_image_path = _make_image_path(
+                            output_dir,
+                            obj.name,
+                            baked_mat.name,
+                            "opacity",
+                            ".png",
+                        )
+                        opacity_image = _create_bake_image(
+                            name=f"{obj.name}_{baked_mat.name}_opacity",
+                            filepath=opacity_image_path,
+                            width=resolution,
+                            height=resolution,
+                            colorspace="Non-Color",
+                        )
+                        entry["opacity_image"] = opacity_image
+                        result.baked_images.append(opacity_image)
+                        _set_active_image_node(baked_mat, opacity_image, entry["uv_layer"])
+                        _configure_emission_for_alpha(baked_mat)
+
+                    _select_object(context, obj)
+                    _bake_object_pass(
+                        context,
+                        obj,
+                        bake_type='EMIT',
+                        pass_filter=None,
+                        margin=margin,
+                    )
+                    for entry in baked_entries:
+                        if not entry or not entry.get("opacity_image"):
+                            continue
+                        entry["opacity_image"].save()
+                    _finish_step(step_message)
+
             for entry in baked_entries:
                 if not entry:
                     continue
-                baked_mat = entry["material"]
-                opacity_image_path = _make_image_path(
-                    output_dir,
-                    obj.name,
-                    baked_mat.name,
-                    "opacity",
-                    ".png",
+                _build_baked_material(
+                    entry["material"],
+                    entry.get("base_image"),
+                    entry.get("opacity_image") if entry.get("use_opacity") else None,
+                    entry.get("use_opacity", False),
+                    uv_layer=entry.get("uv_layer"),
                 )
-                opacity_image = _create_bake_image(
-                    name=f"{obj.name}_{baked_mat.name}_opacity",
-                    filepath=opacity_image_path,
-                    width=resolution,
-                    height=resolution,
-                    colorspace="Non-Color",
-                )
-                entry["opacity_image"] = opacity_image
-                result.baked_images.append(opacity_image)
-                _set_active_image_node(baked_mat, opacity_image, entry["uv_layer"])
-                _configure_emission_for_alpha(baked_mat)
-
-            _select_object(context, obj)
-            _bake_object_pass(
-                context,
-                obj,
-                bake_type='EMIT',
-                pass_filter=None,
-                margin=margin,
-            )
-            completed_steps += 1
-            for entry in baked_entries:
-                if not entry or not entry.get("opacity_image"):
-                    continue
-                entry["opacity_image"].save()
-
-        for entry in baked_entries:
-            if not entry:
-                continue
-            _build_baked_material(
-                entry["material"],
-                entry.get("base_image"),
-                entry.get("opacity_image") if entry.get("use_opacity") else None,
-                entry.get("use_opacity", False),
-            )
 
     return result
+
+
+@contextmanager
+def _temporary_ibl_world(context, settings, diagnostics=None, enabled: bool = True):
+    """Temporarily override the scene World with a known IBL (HDRI) setup."""
+    if not enabled:
+        yield
+        return
+
+    source = str(getattr(settings, "bake_ibl_source", "SCENE_WORLD") or "SCENE_WORLD")
+    if source != "HDRI_FILE":
+        yield
+        return
+
+    hdri_path = str(getattr(settings, "bake_ibl_filepath", "") or "").strip()
+    if not hdri_path:
+        msg = "Bake mode is 'Lit (IBL baked)' but no HDRI file is set."
+        if diagnostics:
+            diagnostics.add_error(msg)
+        raise RuntimeError(msg)
+
+    hdri_file = Path(hdri_path)
+    if not hdri_file.exists():
+        msg = f"HDRI file not found: {hdri_path}"
+        if diagnostics:
+            diagnostics.add_error(msg)
+        raise RuntimeError(msg)
+
+    strength = float(getattr(settings, "bake_ibl_strength", 1.0))
+    rotation = float(getattr(settings, "bake_ibl_rotation", 0.0))  # stored in radians (ANGLE subtype)
+
+    scene = context.scene
+    original_world = scene.world
+    temp_world = None
+    try:
+        temp_world = _create_hdri_world(hdri_path, strength, rotation)
+        scene.world = temp_world
+        yield
+    finally:
+        try:
+            scene.world = original_world
+        except Exception:
+            pass
+        if temp_world is not None:
+            try:
+                bpy.data.worlds.remove(temp_world)
+            except Exception:
+                pass
+
+
+@contextmanager
+def _temporary_mesh_isolation(context, target_obj, enabled: bool = False):
+    """Temporarily hide non-target meshes while baking a target object."""
+    if not enabled:
+        yield
+        return
+
+    hidden_states = []
+    for obj in list(context.view_layer.objects):
+        if obj == target_obj or getattr(obj, "type", None) != "MESH":
+            continue
+        try:
+            hidden_states.append((obj, bool(obj.hide_viewport), bool(obj.hide_render)))
+            obj.hide_viewport = True
+            obj.hide_render = True
+        except Exception:
+            continue
+
+    try:
+        yield
+    finally:
+        for obj, old_hide_viewport, old_hide_render in hidden_states:
+            try:
+                obj.hide_viewport = old_hide_viewport
+                obj.hide_render = old_hide_render
+            except Exception:
+                continue
+
+
+def _create_hdri_world(hdri_path: str, strength: float, rotation_z: float):
+    """Create a World datablock with an Environment Texture IBL."""
+    world = bpy.data.worlds.new(name=_unique_name("BlenderToRCP_IBL", bpy.data.worlds))
+    world.use_nodes = True
+    nt = world.node_tree
+    nodes = nt.nodes
+    links = nt.links
+    nodes.clear()
+
+    out = nodes.new("ShaderNodeOutputWorld")
+    out.location = (600, 0)
+
+    bg = nodes.new("ShaderNodeBackground")
+    bg.location = (360, 0)
+    try:
+        bg.inputs["Strength"].default_value = strength
+    except Exception:
+        pass
+
+    env = nodes.new("ShaderNodeTexEnvironment")
+    env.location = (0, 0)
+    try:
+        env.image = bpy.data.images.load(hdri_path, check_existing=True)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to load HDRI image: {hdri_path} ({exc})") from exc
+
+    mapping = nodes.new("ShaderNodeMapping")
+    mapping.location = (-240, 0)
+    try:
+        mapping.inputs["Rotation"].default_value[2] = rotation_z
+    except Exception:
+        pass
+
+    texcoord = nodes.new("ShaderNodeTexCoord")
+    texcoord.location = (-480, 0)
+
+    try:
+        links.new(texcoord.outputs.get("Generated"), mapping.inputs.get("Vector"))
+    except Exception:
+        pass
+    try:
+        links.new(mapping.outputs.get("Vector"), env.inputs.get("Vector"))
+    except Exception:
+        pass
+    try:
+        links.new(env.outputs.get("Color"), bg.inputs.get("Color"))
+    except Exception:
+        pass
+    try:
+        links.new(bg.outputs.get("Background"), out.inputs.get("Surface"))
+    except Exception:
+        pass
+
+    return world
 
 
 def restore_baked_materials(result: BakeResult, keep_baked_materials: bool) -> None:
@@ -334,7 +497,14 @@ def _configure_emission_for_alpha(material) -> None:
     links.new(emission_node.outputs['Emission'], output_node.inputs['Surface'])
 
 
-def _build_baked_material(material, base_image, opacity_image, use_opacity: bool) -> None:
+def _build_baked_material(
+    material,
+    base_image,
+    opacity_image,
+    use_opacity: bool,
+    *,
+    uv_layer: Optional[str] = None,
+) -> None:
     material.use_nodes = True
     nodes = material.node_tree.nodes
     links = material.node_tree.links
@@ -347,11 +517,15 @@ def _build_baked_material(material, base_image, opacity_image, use_opacity: bool
     if base_image:
         base_node = nodes.new("ShaderNodeTexImage")
         base_node.image = base_image
+        if uv_layer and hasattr(base_node, "uv_map"):
+            base_node.uv_map = uv_layer
         links.new(base_node.outputs['Color'], principled.inputs['Base Color'])
 
     if use_opacity and opacity_image:
         opacity_node = nodes.new("ShaderNodeTexImage")
         opacity_node.image = opacity_image
+        if uv_layer and hasattr(opacity_node, "uv_map"):
+            opacity_node.uv_map = uv_layer
         try:
             separate = nodes.new("ShaderNodeSeparateColor")
             try:
@@ -367,7 +541,14 @@ def _build_baked_material(material, base_image, opacity_image, use_opacity: bool
         material.blend_method = 'OPAQUE'
 
 
-def _bake_object_pass(context, obj, bake_type: str, pass_filter: Optional[set], margin: int) -> None:
+def _bake_object_pass(
+    context,
+    obj,
+    bake_type: str,
+    pass_filter: Optional[set],
+    margin: int,
+    **extra_kwargs,
+) -> None:
     if context.view_layer.objects.active != obj:
         context.view_layer.objects.active = obj
     if obj.mode != 'OBJECT':
@@ -380,7 +561,14 @@ def _bake_object_pass(context, obj, bake_type: str, pass_filter: Optional[set], 
     }
     if pass_filter is not None:
         kwargs["pass_filter"] = pass_filter
-    bpy.ops.object.bake(**kwargs)
+    kwargs.update(extra_kwargs)
+    try:
+        bpy.ops.object.bake(**kwargs)
+    except TypeError:
+        # Some Blender builds don't expose every bake option; retry with the baseline args.
+        for key in list(extra_kwargs.keys()):
+            kwargs.pop(key, None)
+        bpy.ops.object.bake(**kwargs)
 
 
 def _select_object(context, obj) -> None:
