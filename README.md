@@ -117,6 +117,7 @@ Bake modes:
 - `Unlit (Albedo)`: bakes light-independent color and rewrites the exported materials as RealityKit Unlit materials.
 - `Lit (IBL baked)`: bakes the appearance under an image-based light, then still exports the final materials as RealityKit Unlit materials with the baked lighting encoded into textures.
 - `Isolate Meshes (Lit)`: hides non-target meshes during lit bakes to avoid cross-mesh shadow contribution.
+- `Image Format`: baked textures can be written as `.png` or `.avif`; AVIF support requires Blender 5.1+, and older builds warn and fall back to PNG.
 
 ## Material authoring and diagnostics
 BlenderToRCP is not export-only. The Shader Editor integration also supports:

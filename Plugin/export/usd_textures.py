@@ -11,6 +11,7 @@ from .usd_utils import Sdf
 
 
 TEXTURE_EXTENSIONS = {
+    ".avif",
     ".png",
     ".jpg",
     ".jpeg",

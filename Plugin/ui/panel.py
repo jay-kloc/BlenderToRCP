@@ -440,6 +440,17 @@ class BlenderToRCPExportSettings(PropertyGroup):
         update=_on_settings_changed,
     )
 
+    bake_image_format: EnumProperty(
+        name="Image Format",
+        description="File format for baked textures (AVIF requires Blender 5.1+)",
+        items=[
+            ('AVIF', ".avif", "Bake textures as AVIF with alpha (Blender 5.1+)"),
+            ('PNG', ".png", "Bake textures as PNG with alpha"),
+        ],
+        default='AVIF',
+        update=_on_settings_changed,
+    )
+
     bake_resolution_custom: IntProperty(
         name="Custom Resolution",
         description="Custom bake resolution (pixels)",
@@ -774,6 +785,7 @@ class BLENDERTORCP_PT_export_bake_settings(Panel):
             color_box.prop(settings, "bake_isolate_meshes_lit")
 
         layout.prop(settings, "bake_resolution")
+        layout.prop(settings, "bake_image_format")
         if settings.bake_resolution == 'CUSTOM':
             layout.prop(settings, "bake_resolution_custom")
         layout.prop(settings, "bake_margin")

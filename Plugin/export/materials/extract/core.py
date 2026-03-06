@@ -18,6 +18,7 @@ _STAGED_IMAGE_CACHE: Dict[int, str] = {}
 _STAGED_IMAGE_DIR: Optional[Path] = None
 
 _FORMAT_TO_EXTENSION = {
+    "AVIF": ".avif",
     "PNG": ".png",
     "JPEG": ".jpg",
     "JPG": ".jpg",
@@ -33,6 +34,7 @@ _FORMAT_TO_EXTENSION = {
 }
 
 _EXTENSION_TO_FORMAT = {
+    ".avif": "AVIF",
     ".png": "PNG",
     ".jpg": "JPEG",
     ".jpeg": "JPEG",
@@ -1879,6 +1881,11 @@ def _resolve_socket_value(
         texture_info = _texture_info_from_image_node(from_node)
         if not texture_info:
             return None
+        image_channel = _image_channel_from_output_socket(from_socket)
+        if image_channel:
+            texture_info["channel"] = image_channel
+            if image_channel == "a":
+                texture_info["output_type"] = "float"
         if expected_type:
             texture_info.setdefault("output_type", expected_type)
         if channel:
@@ -2032,6 +2039,16 @@ def _channel_from_socket_name(name: str) -> Optional[str]:
         return "y"
     if name == "z":
         return "z"
+    return None
+
+
+def _image_channel_from_output_socket(socket) -> Optional[str]:
+    """Map an image texture output socket to a logical channel token."""
+    if socket is None:
+        return None
+    name = (getattr(socket, "name", None) or "").lower()
+    if name == "alpha":
+        return "a"
     return None
 
 

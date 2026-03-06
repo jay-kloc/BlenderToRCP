@@ -13,6 +13,17 @@ from contextlib import contextmanager
 
 import bpy
 
+_BAKE_IMAGE_FORMATS = {
+    "AVIF": {
+        "file_format": "AVIF",
+        "extension": ".avif",
+    },
+    "PNG": {
+        "file_format": "PNG",
+        "extension": ".png",
+    },
+}
+
 
 class BakeResult:
     """Holds bake session data for restoration/cleanup."""
@@ -41,6 +52,7 @@ def bake_materials_for_objects(
         bake_mode = "UNLIT_ALBEDO"
 
     resolution = _resolve_bake_resolution(settings)
+    image_format = _resolve_bake_image_format(settings, diagnostics)
     margin = int(getattr(settings, "bake_margin", 8))
     bake_base = bool(getattr(settings, "bake_base_color", True))
     bake_opacity = bool(getattr(settings, "bake_opacity", True))
@@ -117,6 +129,7 @@ def bake_materials_for_objects(
                     "material": baked_mat,
                     "base_image": None,
                     "opacity_image": None,
+                    "merged_opacity_image": None,
                     "use_opacity": _material_needs_opacity(source_mat),
                     "uv_layer": uv_layer_name,
                 }
@@ -127,7 +140,7 @@ def bake_materials_for_objects(
                         obj.name,
                         baked_mat.name,
                         "baseColor",
-                        ".png",
+                        image_format["extension"],
                     )
                     base_image = _create_bake_image(
                         name=f"{obj.name}_{baked_mat.name}_baseColor",
@@ -135,6 +148,7 @@ def bake_materials_for_objects(
                         width=resolution,
                         height=resolution,
                         colorspace="sRGB",
+                        file_format=image_format["file_format"],
                     )
                     entry["base_image"] = base_image
                     result.baked_images.append(base_image)
@@ -177,7 +191,7 @@ def bake_materials_for_objects(
                             obj.name,
                             baked_mat.name,
                             "opacity",
-                            ".png",
+                            image_format["extension"],
                         )
                         opacity_image = _create_bake_image(
                             name=f"{obj.name}_{baked_mat.name}_opacity",
@@ -185,6 +199,7 @@ def bake_materials_for_objects(
                             width=resolution,
                             height=resolution,
                             colorspace="Non-Color",
+                            file_format=image_format["file_format"],
                         )
                         entry["opacity_image"] = opacity_image
                         result.baked_images.append(opacity_image)
@@ -205,6 +220,19 @@ def bake_materials_for_objects(
                         entry["opacity_image"].save()
                     _finish_step(step_message)
 
+                    for entry in baked_entries:
+                        if not entry:
+                            continue
+                        if not entry.get("use_opacity"):
+                            continue
+                        merged = _merge_opacity_into_base_image(
+                            entry.get("base_image"),
+                            entry.get("opacity_image"),
+                        )
+                        if merged:
+                            entry["merged_opacity_image"] = entry.get("opacity_image")
+                            entry["opacity_image"] = None
+
             for entry in baked_entries:
                 if not entry:
                     continue
@@ -215,6 +243,12 @@ def bake_materials_for_objects(
                     entry.get("use_opacity", False),
                     uv_layer=entry.get("uv_layer"),
                 )
+                merged_opacity_image = entry.get("merged_opacity_image")
+                if merged_opacity_image is not None and getattr(merged_opacity_image, "users", 0) == 0:
+                    try:
+                        bpy.data.images.remove(merged_opacity_image)
+                    except Exception:
+                        pass
 
     return result
 
@@ -388,6 +422,39 @@ def _resolve_bake_resolution(settings) -> int:
         return 2048
 
 
+def _resolve_bake_image_format(settings, diagnostics=None) -> Dict[str, str]:
+    requested = str(getattr(settings, "bake_image_format", "AVIF") or "AVIF").upper()
+    if requested not in _BAKE_IMAGE_FORMATS:
+        requested = "AVIF"
+
+    available = _available_image_file_formats()
+    if available and requested not in available:
+        fallback = "PNG"
+        if requested == "AVIF":
+            message = (
+                "AVIF baked textures require Blender 5.1 or newer; "
+                f"this Blender build does not support AVIF image saving, falling back to '{fallback}'."
+            )
+            print(f"Warning: {message}")
+            if diagnostics:
+                diagnostics.add_warning(message)
+        elif diagnostics:
+            diagnostics.add_warning(
+                f"Bake image format '{requested}' is not supported by this Blender build; falling back to '{fallback}'."
+            )
+        requested = fallback
+
+    return dict(_BAKE_IMAGE_FORMATS[requested])
+
+
+def _available_image_file_formats() -> Optional[set[str]]:
+    try:
+        prop = bpy.types.Image.bl_rna.properties["file_format"]
+        return {item.identifier for item in prop.enum_items}
+    except Exception:
+        return None
+
+
 def _get_active_uv(obj) -> Optional[str]:
     uv_layers = getattr(obj.data, "uv_layers", None)
     if not uv_layers:
@@ -520,6 +587,12 @@ def _build_baked_material(
         if uv_layer and hasattr(base_node, "uv_map"):
             base_node.uv_map = uv_layer
         links.new(base_node.outputs['Color'], principled.inputs['Base Color'])
+        if use_opacity and opacity_image is None:
+            alpha_output = base_node.outputs.get('Alpha')
+            if alpha_output is not None:
+                links.new(alpha_output, principled.inputs['Alpha'])
+                material.blend_method = 'BLEND'
+                return
 
     if use_opacity and opacity_image:
         opacity_node = nodes.new("ShaderNodeTexImage")
@@ -539,6 +612,51 @@ def _build_baked_material(
         material.blend_method = 'BLEND'
     else:
         material.blend_method = 'OPAQUE'
+
+
+def _merge_opacity_into_base_image(base_image, opacity_image) -> bool:
+    """Copy a grayscale opacity bake into the alpha channel of the base image."""
+    if base_image is None or opacity_image is None:
+        return False
+
+    try:
+        base_size = tuple(getattr(base_image, "size", ())[:2])
+        opacity_size = tuple(getattr(opacity_image, "size", ())[:2])
+    except Exception:
+        return False
+
+    if len(base_size) != 2 or len(opacity_size) != 2 or base_size != opacity_size:
+        return False
+
+    try:
+        base_pixels = list(base_image.pixels)
+        opacity_pixels = list(opacity_image.pixels)
+    except Exception:
+        return False
+
+    if len(base_pixels) != len(opacity_pixels):
+        return False
+
+    for idx in range(0, len(base_pixels), 4):
+        base_pixels[idx + 3] = opacity_pixels[idx]
+
+    try:
+        base_image.pixels[:] = base_pixels
+        base_image.save()
+    except Exception:
+        return False
+
+    opacity_path = getattr(opacity_image, "filepath_raw", "") or ""
+    if not opacity_path:
+        return True
+
+    try:
+        opacity_file = Path(opacity_path)
+        if opacity_file.exists():
+            opacity_file.unlink()
+    except Exception:
+        pass
+    return True
 
 
 def _bake_object_pass(
@@ -587,10 +705,15 @@ def _create_bake_image(
     width: int,
     height: int,
     colorspace: str,
+    file_format: str,
 ) -> object:
     image = bpy.data.images.new(name=name, width=width, height=height, alpha=True)
     image.filepath_raw = str(filepath)
-    image.file_format = "PNG"
+    try:
+        image.file_format = file_format
+    except Exception:
+        image.filepath_raw = str(filepath.with_suffix(".png"))
+        image.file_format = "PNG"
     try:
         image.colorspace_settings.name = colorspace
     except Exception:
