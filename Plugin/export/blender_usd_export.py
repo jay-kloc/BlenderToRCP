@@ -72,6 +72,12 @@ def _ngon_method_for_usd_export(value: str) -> str:
     return value
 
 
+def get_usdz_staging_dir(final_path: str | Path) -> Path:
+    """Return the per-export staging directory used for USDZ packaging."""
+    final_path = Path(final_path)
+    return final_path.parent / ".blendertorcp_temp" / final_path.stem
+
+
 def export_blender_scene(context, settings, final_path: str, diagnostics=None) -> Optional[str]:
     """Export Blender scene to USD using Blender's native exporter
     
@@ -89,9 +95,10 @@ def export_blender_scene(context, settings, final_path: str, diagnostics=None) -
 
     # Determine output path
     if export_format == 'USDZ':
-        # Create temporary USD file
-        temp_dir = Path(final_path).parent / ".blendertorcp_temp"
-        temp_dir.mkdir(exist_ok=True)
+        # Stage USDZ contents in an export-specific temp directory so they can be
+        # packaged and then removed without leaving sidecar assets behind.
+        temp_dir = get_usdz_staging_dir(final_path)
+        temp_dir.mkdir(parents=True, exist_ok=True)
         temp_usd = temp_dir / f"{Path(final_path).stem}.usdc"
         output_path = str(temp_usd)
     else:

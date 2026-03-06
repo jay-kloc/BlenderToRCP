@@ -5,6 +5,7 @@ Creates USDZ files as stored (uncompressed) ZIP archives.
 """
 
 import os
+import shutil
 import zipfile
 from pathlib import Path
 from typing import Optional, List
@@ -32,6 +33,8 @@ def create_usdz(usd_path: str, output_path: str, settings, context, diagnostics=
     else:
         # Use Python fallback
         create_usdz_python(usd_path, output_path, settings, diagnostics)
+
+    _cleanup_usdz_staging(usd_path, diagnostics)
 
 
 def create_usdz_with_tool(usd_path: str, output_path: str, usdzip_path: str):
@@ -121,3 +124,34 @@ def validate_usdz(usdz_path: str) -> bool:
             return True
     except Exception:
         return False
+
+
+def _cleanup_usdz_staging(usd_path: str, diagnostics=None) -> None:
+    """Remove the temporary USDZ staging directory after successful packaging."""
+    staging_dir = Path(usd_path).resolve().parent
+    if staging_dir.name != ".blendertorcp_temp":
+        if staging_dir.parent.name != ".blendertorcp_temp":
+            return
+
+    # Current USDZ exports stage into `.blendertorcp_temp/<stem>/...`; keep
+    # compatibility with older flat staging layouts under `.blendertorcp_temp/`.
+    target_dir = staging_dir
+    if staging_dir.name != ".blendertorcp_temp":
+        temp_root = staging_dir.parent
+    else:
+        temp_root = staging_dir
+
+    try:
+        shutil.rmtree(target_dir)
+    except Exception as exc:
+        if diagnostics:
+            diagnostics.add_warning(
+                f"Failed to remove USDZ staging directory '{target_dir}': {exc}"
+            )
+        return
+
+    if temp_root.name == ".blendertorcp_temp":
+        try:
+            temp_root.rmdir()
+        except OSError:
+            pass

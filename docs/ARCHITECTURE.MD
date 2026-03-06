@@ -1,162 +1,265 @@
 # BlenderToRCP Architecture
 
 ## Overview
-BlenderToRCP is a Blender extension that exports scenes to USD/USDZ and rewrites Blender materials into RealityKit-compatible MaterialX graphs for Reality Composer Pro.
+BlenderToRCP is a Blender extension that exports scenes to USD or USDZ, then rewrites Blender-authored materials into RealityKit-compatible MaterialX graphs for Reality Composer Pro.
 
-Key design constraints:
-- Strict mode: if we can't translate a graph deterministically, export fails with actionable errors (no silent fallbacks).
-- Self-contained exports: textures/assets are staged next to the USD and all asset paths are rewritten to be relative.
-- Reality Composer Pro compatibility: the exporter post-processes USD to match RCP's ShaderGraph/MaterialX expectations.
-- Non-blocking bake workflow: baking is executed in a background Blender process so the UI remains responsive.
+Core design constraints:
+- Strict mode first. If a material graph cannot be translated deterministically, export fails with actionable errors instead of silently falling back.
+- Portable outputs. Textures and auxiliary assets are copied next to the exported USD and rewritten to relative paths.
+- Reality Composer Pro compatibility. Post-processing reshapes Blender-authored USD into the subset RealityKit and RCP expect.
+- Responsive baking. Bake & Export runs inside a second Blender process so the foreground UI stays interactive.
+- Built artifacts stay built. Runtime loads the prebuilt MaterialX manifest and nodegroup library; it does not regenerate them inside Blender.
 
-## Repository Layout
-- `Plugin/` - Blender extension package (add-on code).
-- `Plugin/ops/` - Operators (export, diagnostics).
-- `Plugin/ui/` - UI panels for export + compatibility status.
-- `Plugin/export/` - USD export pipeline and post-processing.
-- `Plugin/export/materials/` - Material extraction, graph building, and authoring.
-- `Plugin/export/bake_textures.py` - Texture baking helpers for Bake & Export.
-- `Plugin/manifest/` - Prebuilt MaterialX nodedef manifest (runtime only; no rebuild in-plugin).
-- `References/` - MaterialX definitions and Reality Composer Pro reference assets.
-- `scripts/` - Developer scripts (manifest builder, nodegroup builder, validation).
+## Repository layout
+- `Plugin/`: Blender add-on package.
+- `Plugin/ui/`: 3D View and Shader Editor panels, menus, and the scene property group that stores export settings.
+- `Plugin/ops/`: user-invoked operators for export, background bake/export, diagnostics, node insertion, and material validation.
+- `Plugin/export/`: USD export pipeline, post-processing, texture and asset staging, animation clip authoring, diagnostics, and USDZ packaging.
+- `Plugin/export/materials/`: Blender material extraction, MaterialX graph construction, and USD material authoring.
+- `Plugin/nodes/`: RealityKit compatibility rules, node metadata, generated nodegroup builders, and preview builders.
+- `Plugin/manifest/`: bundled `rk_nodes_manifest.json` plus selectors for MaterialX nodedef lookup.
+- `Plugin/assets/nodegroups.blend`: generated nodegroup library used by the authoring tools.
+- `Plugin/core/paths.py`: shared path resolution for manifests, assets, and bundled resources.
+- `scripts/`: developer tooling for packaging, manifest generation, nodegroup generation, and validation.
+- `References/MaterialX-definitions/`: Apple MaterialX definition sources used to build the runtime manifest.
+- `References/RealityComposerProProject/`: reference assets and Reality Composer Pro project material.
+- `References/Doc/` and `References/Blender/`: supporting reference documentation and sample Blender scenes.
+- `.github/workflows/build-archive.yml`: CI packaging workflow for the installable archive.
 
-## Export Pipeline (End-to-End)
-The export is a multi-step pipeline:
+## Blender UX surface
+BlenderToRCP appears in multiple editors, not just one export panel.
 
-### 0) Settings + strict validation
-Entry point: `Plugin/ops/export_operator.py`
-- Reads export settings from `context.scene.blender_to_rcp_export_settings`.
-- Suggests a default output path based on the current `.blend` filename.
-- Validates all scene materials in strict mode (`Plugin/nodes/validate.py`); unsupported nodes block export.
+### 3D View sidebar
+Defined in `Plugin/ui/panel.py`.
+- Category: `RCP Exporter`
+- Main panel: output path, export format, actions, background job monitor, diagnostics access.
+- Child panels:
+  - `USD Export: General`
+  - `USD Export: Object Types`
+  - `USD Export: Geometry`
+  - `USD Export: Rigging`
+  - `Bake Settings`
 
-### 1) Blender USD export (base stage)
+### Shader Editor sidebar
+Defined in `Plugin/ui/shader_panel.py` and `Plugin/ui/shader_authoring_panel.py`.
+- `RealityKit Compatibility`: validates the active material and exposes the offending-node workflow.
+- `RealityKit Authoring`: inserts bundled RealityKit PBR or Unlit node groups.
+
+### Shader Editor add menu
+Defined in `Plugin/ui/shader_menu.py`.
+- `Add > RealityKit Nodes` exposes the generated node catalog for inserting supported RealityKit nodegroups into the active material.
+
+## Scene settings and preferences
+The main scene property group lives in `Plugin/ui/panel.py` as `BlenderToRCPExportSettings`.
+
+Important behaviors:
+- Export settings are stored on the scene.
+- The add-on persists most last-used settings into Blender preferences and restores them on the next session.
+- Export paths are remembered per `.blend` file through add-on preferences.
+
+Preferences live in `Plugin/prefs.py`:
+- `usdzip_path`
+- `materialx_library_path`
+- `default_export_format`
+- `enable_diagnostics`
+
+These preferences are operational, not cosmetic. For example, `enable_diagnostics` gates whether `.diagnostics.json` files are written and whether the UI exposes the diagnostics viewer.
+
+## Export pipeline
+The foreground export operator is `blendertorcp.export` in `Plugin/ops/export_operator.py`.
+
+### 0. Settings restore and strict validation
+- The operator restores persisted settings before export.
+- It validates every material in the current scene with `Plugin/nodes/validate.py`.
+- Unsupported nodes block export immediately with Blender `report()` errors.
+
+### 1. Base USD export
 Wrapper: `Plugin/export/blender_usd_export.py`
-- Computes the real output path:
-  - For `.usda/.usdc`: export directly to the requested file.
-  - For `.usdz`: export to `.blendertorcp_temp/<name>.usdc` first, then package later.
-- Calls `bpy.ops.wm.usd_export(...)` with:
-  - `export_textures = False` (Blender won't pack/copy textures; we stage them ourselves)
-  - `export_materials = True` (we need the authored bindings as a starting point, even though we rewrite)
-  - `convert_orientation/forward_axis/up_axis` from our panel settings
+- Computes the real output path.
+- For `.usda` or `.usdc`, writes directly to the requested destination.
+- For `.usdz`, exports to `.blendertorcp_temp/<name>.usdc` first and packages later.
+- Calls Blender's USD exporter with the add-on scene settings rather than a hard-coded configuration.
 
-### 1b) Bake & Export (background workflow)
-Entry point: `Plugin/ops/bake_export_operator.py` (`blendertorcp.bake_export_background`)
-- Spawns a second Blender process to keep the UI responsive.
-- Writes job state to `<export_dir>/.blendertorcp_jobs/<job_id>/status.json`.
-- Streams output to `log.txt` in the same job directory.
-- The job runner lives inside the add-on: `Plugin/bake_export_runner.py`.
-
-Runner behavior (`Plugin/bake_export_runner.py`):
-- Ensures the add-on is enabled.
-- Applies serialized settings from `settings.json`.
-- Bakes textures to `<export_dir>/textures` using `Plugin/export/bake_textures.py`.
-- In `Lit (IBL baked)` mode, an optional isolation toggle hides non-target meshes per bake pass to avoid cross-mesh shadow contribution.
-- Rewrites exported materials as Unlit for Bake & Export.
-- Runs the normal USD export + postprocess pipeline.
-
-### 2) Animation preparation (optional)
-When `export_animation=True`, we temporarily restructure animation so Reality Composer Pro can clip it reliably.
-
+### 2. Optional animation preparation
 Implementation: `Plugin/export/animation_export.py`
-- Targets:
-  - Armatures (skel animation)
-  - Non-armature objects with transform animation (meshes, empties, cameras, etc.)
-  - Shape keys (mesh shapekeys are handled separately; NLA baking doesn't support them directly)
-- Sources:
-  - All `bpy.data.actions` (alphabetical order)
-- Strategy:
-  - For each target, build a single continuous timeline by placing each action back-to-back.
-  - Bake to a temporary action for export.
-  - Record clip segments (name + start/end frames) into diagnostics.
-  - Always restore the `.blend` scene state (tracks, actions, selection, active object) on success/failure.
+- Collects actions from `bpy.data.actions`.
+- Concatenates them into a temporary export timeline.
+- Records clip boundaries into diagnostics.
+- Restores original scene state after export, including tracks, active actions, selection, and active object.
 
-### 3) USD post-processing (RealityKit/RCP compatibility)
-Pipeline: `Plugin/export/postprocess_usd.py`
-- Opens the stage with pxr (`Usd.Stage.Open(..., LoadAll)`).
-- Runs:
-  - `normalize_scene(stage, settings)` (`Plugin/export/usd_scene.py`)
-    - Repairs common invalid patterns for downstream tools (example: re-type prims authored as `Xform` but carrying `Mesh` attributes).
-  - `rewrite_materials(stage, settings, context, diagnostics)` (`Plugin/export/materials/...`)
-    - Replaces Blender-authored materials with RealityKit ShaderGraph MaterialX graphs.
-  - `author_animation_library(stage, settings, diagnostics)` (`Plugin/export/usd_animation_library.py`)
-    - Authors a minimal `RealityKitComponent "AnimationLibrary"` with clip boundaries for RCP.
-  - `prepare_textures(stage, usd_path, settings, diagnostics)` (`Plugin/export/usd_textures.py`)
-    - Copies textures into `<usd_dir>/textures`
-    - Rewrites all texture asset paths to be relative (so the export is portable)
-  - `prepare_assets(stage, usd_path, diagnostics)` (`Plugin/export/usd_assets.py`)
-    - Same staging/relativizing pattern for non-texture assets
-- Saves the stage.
+### 3. USD post-processing
+Pipeline entry point: `Plugin/export/postprocess_usd.py`
 
-### 4) USDZ packaging (optional)
+Sub-steps:
+- `normalize_scene(stage, settings)` from `Plugin/export/usd_scene.py`
+- `rewrite_materials(stage, settings, context, diagnostics)` from `Plugin/export/materials/rewrite.py`
+- `author_animation_library(stage, settings, diagnostics)` from `Plugin/export/usd_animation_library.py`
+- `prepare_textures(stage, usd_path, settings, diagnostics)` from `Plugin/export/usd_textures.py`
+- `prepare_assets(stage, usd_path, diagnostics)` from `Plugin/export/usd_assets.py`
+
+This stage is where Blender-authored USD is converted into the RealityKit and Reality Composer Pro contract the rest of the toolchain expects.
+
+### 4. USDZ packaging
 Packager: `Plugin/export/pack_usdz.py`
-- Uses `usdzip` if configured in add-on preferences; otherwise creates a stored (uncompressed) zip.
-- Includes the main USD plus `textures/` and `assets/` folders.
+- Uses `usdzip` when configured in preferences.
+- Falls back to the Python zip-based packager when `usdzip_path` is empty.
+- Packages the main USD together with staged `textures/` and `assets/`.
 
-### 5) Diagnostics
-Diagnostics collector: `Plugin/export/diagnostics.py`
-- Captures warnings/errors, animation segment timings, and export metadata.
-- The repo ignores `*.diagnostics.json` (intended as local debug output, not committed).
+### 5. Diagnostics
+Collector: `Plugin/export/diagnostics.py`
+- Captures warnings, errors, animation segments, texture work, and material conversion results.
+- If diagnostics are enabled in preferences, writes `<output>.diagnostics.json`.
+- The diagnostics viewer in `Plugin/ops/export_operator.py` renders a summary dialog in Blender.
 
-## Material Rewrite Flow
-1. **Manifest** (`Plugin/manifest/rk_nodes_manifest.json`)
-   - Prebuilt catalog of MaterialX nodedefs.
-   - Loaded by `Plugin/manifest/materialx_nodes.py`.
-   - Typed variants are selected by IO signature.
+## Background Bake & Export
+The background bake operator is `blendertorcp.bake_export_background` in `Plugin/ops/bake_export_operator.py`.
 
-2. **Extraction** (`Plugin/export/materials/extract/core.py`)
-   - Traverses Blender nodes and emits `material_data`.
-   - Produces `input_graphs` for non-trivial chains.
-   - Emits unresolved warnings for unsupported patterns.
+### Control-plane behavior
+- Requires the `.blend` file to be saved before launch.
+- Allows only one background job at a time.
+- Serializes settings into `<export_dir>/.blendertorcp_jobs/<job_id>/settings.json`.
+- Writes live status to `status.json` and process output to `log.txt`.
+- Stores the job directory and process ID on the scene settings.
+- Uses a modal watcher to refresh the UI, detect process death, and enforce per-step timeouts.
 
-3. **Graph Build** (`Plugin/export/materials/graph.py`)
-   - Constructs a MaterialX node graph payload.
-   - Injects expression graphs into shader inputs.
+### Runner behavior
+Runner script: `Plugin/bake_export_runner.py`
+- Launches Blender in background mode with the current `.blend`.
+- Ensures the add-on is enabled inside the background session.
+- Applies serialized scene settings.
+- Restores selection when `Selection Only` is active.
+- Switches the render engine to `CYCLES` for baking.
+- Uses a heartbeat thread to keep `status.json` fresh while long bake steps run.
+- Restores render engine, selection, active object, and mode after completion or failure.
 
-4. **Authoring** (`Plugin/export/materials/author.py`)
-   - Creates USD Shade nodes from the graph payload.
-   - Connects textures, constants, and graph nodes.
-   - Applies conversion nodes when types differ.
+### Bake semantics
+Baking is implemented in `Plugin/export/bake_textures.py`.
 
-5. **Texture Nodes** (`Plugin/export/materials/textures.py`)
-   - Picks image nodedefs by output type.
-   - Adds separate/combine only when needed (e.g., alpha usage).
-   - Applies swizzle for channel extraction.
-   - Normal maps use ShaderGraph's `Normal Map` (`ND_normalmap`) so tangent-space normals are transformed correctly.
+User-visible contracts:
+- `Bake & Export` always authors the final exported materials as RealityKit Unlit materials.
+- `Unlit (Albedo)` bakes light-independent color.
+- `Lit (IBL baked)` bakes lit appearance under the chosen image-based light, then still exports Unlit materials whose textures already include that lighting.
+- `Isolate Meshes (Lit)` hides non-target meshes during each lit bake pass to avoid cross-mesh shadows.
+- `Step Timeout (sec)` is enforced by the foreground watcher and can terminate the background Blender process when a single step stalls.
 
-## Texture and Asset Staging
-- Image paths are resolved in `extract/core.py`. Packed or temp images are staged to a stable temp cache so they can be copied.
-- `prepare_textures()` copies textures into `<usd_dir>/textures` and rewrites asset paths to relative.
-- `prepare_assets()` handles non-texture assets similarly.
+## Material rewrite flow
+Material rewriting is orchestrated in `Plugin/export/materials/rewrite.py`.
 
-## Validation and Strict Mode
-- `Plugin/nodes/validate.py` defines supported, partial, bake-required, and unsupported nodes.
-- Export is strict: unsupported nodes block export with clear errors.
-- The Shader Editor panel shows compatibility status and last diagnostics.
+### Runtime inputs
+- Blender material bindings already authored by the base USD export.
+- Blender material data resolved from `context.blend_data.materials`.
+- The prebuilt MaterialX manifest loaded through `Plugin/manifest/materialx_nodes.py`.
 
-## UI and Settings
-- Main export panel: `Plugin/ui/panel.py`.
-- Shader compatibility panel: `Plugin/ui/shader_panel.py`.
-- Add-on preferences: `Plugin/prefs.py`.
-- Export settings are stored on the scene and applied per export.
-- Bake & Export background status is shown inline under the Bake & Export button, sourced from the job's `status.json`.
-- Bake & Export runs exclusively as a background job (no blocking UI operator).
+### Extraction
+`Plugin/export/materials/extract/core.py`
+- Traverses Blender node graphs.
+- Emits normalized `material_data` payloads and input graph fragments.
+- Flags unresolved patterns for diagnostics.
 
-## Developer Scripts
-- `scripts/build_materialx_manifest.py` - rebuild `rk_nodes_manifest.json` from `.mtlx` sources.
-- `scripts/build_nodegroups.py` - generate `Plugin/assets/nodegroups.blend` for authoring previews.
-- `scripts/validate_nodes.py` - systematic validation tooling.
+### Graph construction
+`Plugin/export/materials/graph.py`
+- Converts extracted material data into a MaterialX graph payload.
+- Handles graph fragments, typed values, and conversion nodes.
 
-## Animation Export & RCP Clips
-- Animation concatenation/bake is implemented in `Plugin/export/animation_export.py`.
-  - Source: all `bpy.data.actions` (alphabetical).
-  - Output: per-target baked actions used only for export, then scene state is restored.
-- RCP clips are authored in `Plugin/export/usd_animation_library.py` by writing a
-  `RealityKitComponent` named `AnimationLibrary` under the stage default prim.
-  - Minimal fields: `clipNames`, `startTimes`, and `sourceAnimationName`.
-  - `sourceAnimationName` varies based on how animation is authored in USD and how Reality Composer Pro labels it.
-    To avoid missing clips, we author clip definitions for multiple likely sources:
-    - `"default subtree animation"` (common for skeletal/UsdSkel pipelines)
-    - `"transform animation"` (common for transform-only timelines)
-  - Clip timing is currently authored from the integer frame boundaries of the baked
-    export timeline (converted to seconds using `timeCodesPerSecond`). Reality Composer Pro
-    behavior for sub-frame clip boundaries is not fully characterized yet.
+### Authoring
+`Plugin/export/materials/author.py`
+- Creates USD Shade nodes.
+- Connects shader inputs, textures, constants, and internal graph nodes.
+- Binds the rewritten material back onto mesh prims.
+
+### Material kinds
+`rewrite_materials()` currently branches between:
+- `principled`
+- `emission`
+- `simple`
+- `rk_graph`
+- `rk_group`
+
+`force_unlit_materials` is used by Bake & Export so that the final stage is always authored as RealityKit Unlit even when the source graph started as a lit graph.
+
+## MaterialX manifest and node catalog
+Runtime manifest loading lives in `Plugin/manifest/materialx_nodes.py`.
+
+Important contracts:
+- The manifest path is resolved through `Plugin/core/paths.py`.
+- Runtime only loads the JSON manifest; it never rebuilds it.
+- Missing or invalid manifests produce startup warnings or manifest errors.
+
+Build path:
+- `scripts/build_materialx_manifest.py` parses `.mtlx` files under `References/MaterialX-definitions`.
+- It emits `Plugin/manifest/rk_nodes_manifest.json`.
+- The manifest includes nodedef metadata, multiple lookup indexes, and policy flags such as:
+  - omitted geometry modifier nodes
+  - KTX-required nodes
+  - fallback nodes
+  - half-type variants
+
+## RealityKit nodegroup authoring path
+This repo also ships authoring helpers, not just export logic.
+
+### Node metadata
+`Plugin/nodes/metadata.py`
+- Builds a user-facing node catalog from the bundled manifest.
+- Applies label overrides and section grouping.
+- Keeps preferred non-half variants when multiple nodedefs exist.
+
+### Nodegroup generation
+`Plugin/nodes/nodegroups/builder.py`
+- Builds or refreshes NodeGroups from the catalog.
+- Stores version metadata on each generated group.
+- Saves the group library through `save_nodegroup_library()`.
+
+### Bundled nodegroup asset
+Generated by `scripts/build_nodegroups.py`
+- Output: `Plugin/assets/nodegroups.blend`
+- This file is what the insertion operators load at runtime if a nodegroup is not already present in the current Blender session.
+
+### User-facing operators
+Defined in `Plugin/ops/nodegroup_operators.py`
+- Insert RealityKit PBR group
+- Insert RealityKit Unlit group
+- Insert arbitrary catalog nodes from the add menu
+
+## Validation surface
+Validation exists at three layers.
+
+### In-editor material validation
+`Plugin/nodes/validate.py` plus `Plugin/ops/validation_operators.py`
+- Validates the active material.
+- Selects offending nodes.
+- Removes offending nodes when requested.
+
+### Per-node compatibility harness
+`scripts/validate_nodes.py`
+- Wrapper around `scripts/_lib/node_validation.py`.
+- Generates minimal `.rkassets` bundles for supported nodes.
+- Optionally compiles them with `xcrun realitytool`.
+- Defaults output to `tests/node_validation`.
+
+### Export validation
+`scripts/validate_exports.py`
+- Accepts a USD file, `.rkassets` bundle, or directory.
+- Runs `usdchecker` when enabled.
+- Lints nodedef IDs and asset paths.
+- Optionally compiles bundles with `xcrun realitytool`.
+
+These scripts are the closest thing this repo has to an automated compatibility test suite.
+
+## Developer scripts
+- `scripts/build_archive.sh`: package `Plugin/` into `dist/BlenderToRCP.zip`.
+- `scripts/build_materialx_manifest.py`: rebuild the runtime nodedef manifest from MaterialX sources.
+- `scripts/build_nodegroups.py`: regenerate `Plugin/assets/nodegroups.blend`.
+- `scripts/validate_nodes.py`: generate and optionally compile per-node compatibility fixtures.
+- `scripts/validate_exports.py`: validate exported USD or `.rkassets` bundles.
+
+## Release path
+Packaging is intentionally deterministic:
+- Local build: `bash scripts/build_archive.sh`
+- CI build: `.github/workflows/build-archive.yml`
+- Output artifact: `dist/BlenderToRCP.zip`
+
+Release-facing metadata lives in:
+- `Plugin/blender_manifest.toml`
+- `Plugin/__init__.py`
+
+If packaging changes or release automation is touched, keep those metadata surfaces aligned with the built archive and published release asset.
