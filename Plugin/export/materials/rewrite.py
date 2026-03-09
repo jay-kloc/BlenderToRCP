@@ -73,6 +73,15 @@ def rewrite_materials(stage, settings, context, diagnostics=None) -> None:
                     graph = None
 
                 if graph:
+                    # Collect old UsdPreviewSurface shaders before rewrite.
+                    old_children = [
+                        child.GetPath()
+                        for child in material_prim.GetChildren()
+                    ]
+                    old_surface_output = material_prim.GetAttribute(
+                        "outputs:surface"
+                    )
+
                     created_materials[material_key] = create_materialx_material(
                         stage,
                         str(material_prim.GetPath()),
@@ -81,6 +90,16 @@ def rewrite_materials(stage, settings, context, diagnostics=None) -> None:
                         manifest,
                         diagnostics
                     )
+
+                    # Remove old UsdPreviewSurface shaders and output.
+                    if created_materials[material_key]:
+                        for child_path in old_children:
+                            stage.RemovePrim(child_path)
+                        if old_surface_output and old_surface_output.IsValid():
+                            material_prim.RemoveProperty(
+                                old_surface_output.GetName()
+                            )
+
                     if diagnostics:
                         diagnostics.add_material_converted(blender_name)
             except Exception as e:

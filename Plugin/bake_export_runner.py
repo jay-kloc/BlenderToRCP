@@ -237,10 +237,7 @@ def main() -> int:
         bake_ops._ensure_object_mode(bpy.context)
         bake_ops._set_render_engine(bpy.context.scene, 'CYCLES')
 
-        if scene_settings.export_format == "USDZ":
-            texture_dir = blender_usd_export.get_usdz_staging_dir(export_path) / "textures"
-        else:
-            texture_dir = Path(export_path).parent / "textures"
+        texture_dir = Path(export_path).parent / "textures"
         progress_reporter = _BakeProgressReporter(status_path, payload.get("export_path"))
         progress_reporter.start()
 
