@@ -10,6 +10,7 @@ from .usd_scene import normalize_scene
 from .usd_textures import prepare_textures
 from .usd_assets import prepare_assets
 from .usd_variants import author_material_variants
+from .usd_geometry_variants import author_geometry_variants
 from .usd_utils import Usd, require_pxr
 
 
@@ -26,6 +27,8 @@ def process_usd_stage(usd_path: str, settings, context, diagnostics=None) -> Non
     rewrite_materials(stage, settings, context, diagnostics)
 
     author_material_variants(stage, context, settings, diagnostics)
+
+    author_geometry_variants(stage, context, settings, diagnostics)
 
     author_animation_library(stage, settings, diagnostics)
 

@@ -11,6 +11,7 @@ from . import bake_export_operator
 from . import nodegroup_operators
 from . import validation_operators
 from . import variant_operators
+from . import geometry_variant_operators
 
 if _needs_reload:
     import importlib
@@ -19,6 +20,7 @@ if _needs_reload:
     nodegroup_operators = importlib.reload(nodegroup_operators)
     validation_operators = importlib.reload(validation_operators)
     variant_operators = importlib.reload(variant_operators)
+    geometry_variant_operators = importlib.reload(geometry_variant_operators)
 
 
 def register():
@@ -28,10 +30,12 @@ def register():
     nodegroup_operators.register()
     validation_operators.register()
     variant_operators.register()
+    geometry_variant_operators.register()
 
 
 def unregister():
     """Unregister all operator classes."""
+    geometry_variant_operators.unregister()
     variant_operators.unregister()
     validation_operators.unregister()
     nodegroup_operators.unregister()
