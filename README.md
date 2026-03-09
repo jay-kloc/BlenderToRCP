@@ -10,6 +10,7 @@ Blender add-on to export USD/USDZ and rewrite Blender materials into Reality Com
 - Animation compatibility: actions can be concatenated for export and authored into a Reality Composer Pro animation library.
 - Background Bake & Export: runs baking and export in a second Blender process, writes status/log files, and keeps the UI responsive.
 - Material variants: define multiple named material sets per object and export them as USD `materialVariant` VariantSets, switchable in Reality Composer Pro.
+- Geometry variants: define multiple mesh alternatives on an object and export them as USD `geometryVariant` VariantSets for runtime geometry switching in Reality Composer Pro.
 - Shader authoring helpers: insert RealityKit PBR or Unlit node groups, browse a generated RealityKit node menu, and validate active materials in the Shader Editor.
 
 ## Important note
@@ -21,7 +22,8 @@ This repo supports two workflows:
 
 ## Where to find it in Blender
 - `3D View > Sidebar > RCP Exporter`: main export UI, advanced USD export settings, bake settings, job monitor, and diagnostics access.
-- `3D View > Sidebar > RCP Exporter > Material Variants`: define, apply, and update material variant sets per object.
+- `Properties > Material > USD Material Variants`: define, apply, and update material variant sets per object.
+- `Properties > Object > USD Geometry Variants`: define geometry variants on mesh or empty objects for runtime geometry switching.
 - `Shader Editor > Sidebar > RCP Exporter > RealityKit Compatibility`: validate the active material and select offending nodes.
 - `Shader Editor > Sidebar > RCP Exporter > RealityKit Authoring`: insert RealityKit PBR or Unlit node groups.
 - `Shader Editor > Add > RealityKit Nodes`: insert generated RealityKit node groups from the bundled node catalog.
@@ -126,7 +128,7 @@ Material variants let you define multiple named material configurations on a sin
 
 ### Defining variants in Blender
 1. Select an object that has at least one material slot.
-2. Open `3D View > Sidebar > RCP Exporter > Material Variants`.
+2. Open `Properties > Material > USD Material Variants`.
 3. Click `+` to capture the current material slot assignments as a new named variant.
 4. Change the object's material slots and click `+` again to create additional variants.
 5. Use `Apply` to swap the object's live materials to a selected variant, or `Update` to overwrite a variant with the current slot assignments.
@@ -139,6 +141,42 @@ During USD export the add-on:
 - Clears any local `material:binding` on the mesh so the variant opinion wins (USD LIVRPS composition rules).
 
 The first variant is selected by default. In Reality Composer Pro the variant dropdown appears on the Xform, allowing you to switch materials at authoring time or at runtime via the RealityKit API.
+
+## Geometry variants
+Geometry variants let you define multiple mesh alternatives on a single object and export them as USD `geometryVariant` VariantSets. Switching the variant in Reality Composer Pro swaps the visible geometry at authoring time or at runtime via the RealityKit API.
+
+### Blender setup
+Geometry variants require a parent-child hierarchy in Blender:
+
+1. Create an Empty (or use an existing mesh object) as the variant owner.
+2. Parent the alternative mesh objects under it (`Ctrl+P > Object`).
+3. Select the owner and open `Properties > Object > USD Geometry Variants`.
+4. Click `+` to add a variant. Give it a name and pick the target mesh in the "Mesh Object" field.
+5. Repeat for each alternative geometry.
+6. Use `Preview` to toggle visibility in Blender and verify each variant.
+
+Example hierarchy:
+```
+MyAsset          (Empty — variant owner)
+  ├── LowPoly   (Mesh — variant target)
+  ├── HighPoly   (Mesh — variant target)
+  └── Damaged    (Mesh — variant target)
+```
+
+The panel warns if a target mesh is not parented under the owner.
+
+### How it exports
+During USD export the add-on:
+- Locates the Xform prim that corresponds to the variant owner.
+- Creates a `geometryVariant` VariantSet on that Xform.
+- Copies each target child prim spec (including all descendant prims, material bindings, and material variants) into the corresponding variant body.
+- Removes the original child prim specs from the Xform so only the active variant's geometry exists at any time.
+- Sets the first variant as the default selection.
+
+This move-into-variant strategy ensures that RealityKit fully swaps the prim tree on variant switch, which is required for runtime switching in Reality Composer Pro. Material variants on the child prims are preserved inside each geometry variant body.
+
+### Combining material and geometry variants
+An object can have both `materialVariant` and `geometryVariant` VariantSets. The add-on merges both into the prim's `variantSetNames` list. In Reality Composer Pro, both dropdowns appear on the same Xform prim, so you can independently switch geometry and materials.
 
 ## Material authoring and diagnostics
 BlenderToRCP is not export-only. The Shader Editor integration also supports:
