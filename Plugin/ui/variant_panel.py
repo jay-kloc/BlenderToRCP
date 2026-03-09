@@ -19,29 +19,21 @@ class BLENDERTORCP_UL_material_variants(UIList):
 
 
 class BLENDERTORCP_PT_material_variants(Panel):
-    bl_label = "Material Variants"
+    bl_label = "USD Material Variants"
     bl_idname = "BLENDERTORCP_PT_material_variants"
-    bl_parent_id = "BLENDERTORCP_PT_export_panel"
-    bl_space_type = 'VIEW_3D'
-    bl_region_type = 'UI'
-    bl_category = "RCP Exporter"
+    bl_space_type = 'PROPERTIES'
+    bl_region_type = 'WINDOW'
+    bl_context = "material"
     bl_options = {'DEFAULT_CLOSED'}
 
     @classmethod
     def poll(cls, context):
-        return context.active_object is not None
+        obj = context.active_object
+        return obj is not None and obj.material_slots
 
     def draw(self, context):
         layout = self.layout
         obj = context.active_object
-        if not obj:
-            layout.label(text="No active object.")
-            return
-
-        if not obj.material_slots:
-            layout.label(text="Object has no material slots.", icon='INFO')
-            return
-
         variant_set = obj.blendertorcp_material_variants
 
         row = layout.row()
