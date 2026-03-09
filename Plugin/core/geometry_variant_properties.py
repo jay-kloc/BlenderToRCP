@@ -1,9 +1,10 @@
 """
 Property groups for the geometry variant system.
 
-Each geometry variant references a Blender mesh object parented under
-the owner.  At USD export time the child prim specs are moved into
-variant bodies so that switching the geometryVariant swaps geometry.
+Each geometry variant references one or more Blender mesh objects
+parented under the owner.  At USD export time the child prim specs
+are moved into variant bodies so that switching the geometryVariant
+swaps the visible geometry.
 """
 
 import bpy
@@ -15,13 +16,21 @@ def _mesh_object_poll(self, obj):
     return obj.type == 'MESH'
 
 
-class BLENDERTORCP_GeometryVariantEntry(PropertyGroup):
-    """A single geometry variant pointing to a mesh object."""
+class BLENDERTORCP_GeometryVariantTarget(PropertyGroup):
+    """A single mesh-object pointer inside a geometry variant."""
     target_object: PointerProperty(
         type=bpy.types.Object,
         name="Mesh Object",
         poll=_mesh_object_poll,
     )
+
+
+class BLENDERTORCP_GeometryVariantEntry(PropertyGroup):
+    """A named geometry variant containing one or more mesh targets."""
+    targets: CollectionProperty(
+        type=BLENDERTORCP_GeometryVariantTarget,
+    )
+    active_target_index: IntProperty(default=0)
 
 
 class BLENDERTORCP_GeometryVariantSet(PropertyGroup):
@@ -33,6 +42,7 @@ class BLENDERTORCP_GeometryVariantSet(PropertyGroup):
 
 
 _classes = (
+    BLENDERTORCP_GeometryVariantTarget,
     BLENDERTORCP_GeometryVariantEntry,
     BLENDERTORCP_GeometryVariantSet,
 )

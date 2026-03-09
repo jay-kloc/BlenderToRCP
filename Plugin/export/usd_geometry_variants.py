@@ -4,11 +4,11 @@ USD geometry variant authoring.
 Creates geometryVariant VariantSets on object Xform prims based on
 Blender geometry variant definitions stored on objects.
 
-Each geometry variant references a Blender mesh object parented under
-the owner.  At export time the child prim specs are copied into the
-corresponding variant body and the originals are removed.  Switching
-the geometryVariant in Reality Composer Pro swaps the entire child
-prim tree, preserving material variants and bindings.
+Each geometry variant references one or more Blender mesh objects
+parented under the owner.  At export time the child prim specs are
+copied into the corresponding variant body and the originals are
+removed.  Switching the geometryVariant in Reality Composer Pro swaps
+the entire child prim tree, preserving material variants and bindings.
 """
 
 from __future__ import annotations
@@ -53,14 +53,14 @@ def author_geometry_variants(
                 )
             continue
 
-        child_entries = _resolve_variant_children(
+        variant_entries = _resolve_variant_children(
             obj, variant_set_data, xform_prim, diagnostics,
         )
-        if not child_entries:
+        if not variant_entries:
             continue
 
         _author_variant_set(
-            layer, xform_prim.GetPath(), child_entries,
+            layer, xform_prim.GetPath(), variant_entries,
             variant_set_data, diagnostics, obj_name,
         )
 
@@ -70,38 +70,46 @@ def author_geometry_variants(
 # ===================================================================
 
 def _resolve_variant_children(obj, variant_set_data, xform_prim, diagnostics):
-    """Map each variant to its child prim name under *xform_prim*.
+    """Map each variant to its child prim names under *xform_prim*.
 
-    Returns a list of ``(variant_name, child_prim_name)`` pairs.
+    Returns a list of ``(variant_name, [child_prim_name, ...])`` pairs.
     """
     entries = []
     vset_path = xform_prim.GetPath()
 
     for variant in variant_set_data.variants:
-        target_obj = variant.target_object
-        if not target_obj:
-            continue
+        child_names = []
 
-        if target_obj != obj and target_obj.parent != obj:
-            if diagnostics:
-                diagnostics.add_warning(
-                    f"Geometry variant target '{target_obj.name}' is not "
-                    f"parented under '{obj.name}'. "
-                    "Parent it (Ctrl+P > Object) for variants to work."
-                )
-            continue
+        for target_entry in variant.targets:
+            target_obj = target_entry.target_object
+            if not target_obj:
+                continue
 
-        is_self = (target_obj == obj)
-        child_name = _find_child_prim_name(xform_prim, target_obj.name, is_self)
-        if not child_name:
-            if diagnostics:
-                diagnostics.add_warning(
-                    f"No child prim found for '{target_obj.name}' "
-                    f"under Xform '{vset_path}'; skipping."
-                )
-            continue
+            if target_obj != obj and target_obj.parent != obj:
+                if diagnostics:
+                    diagnostics.add_warning(
+                        f"Geometry variant target '{target_obj.name}' is not "
+                        f"parented under '{obj.name}'. "
+                        "Parent it (Ctrl+P > Object) for variants to work."
+                    )
+                continue
 
-        entries.append((variant.name, child_name))
+            is_self = (target_obj == obj)
+            child_name = _find_child_prim_name(
+                xform_prim, target_obj.name, is_self,
+            )
+            if not child_name:
+                if diagnostics:
+                    diagnostics.add_warning(
+                        f"No child prim found for '{target_obj.name}' "
+                        f"under Xform '{vset_path}'; skipping."
+                    )
+                continue
+
+            child_names.append(child_name)
+
+        if child_names:
+            entries.append((variant.name, child_names))
 
     return entries
 
@@ -111,7 +119,8 @@ def _resolve_variant_children(obj, variant_set_data, xform_prim, diagnostics):
 # ===================================================================
 
 def _author_variant_set(
-    layer, vset_path, child_entries, variant_set_data, diagnostics, obj_name,
+    layer, vset_path, variant_entries, variant_set_data,
+    diagnostics, obj_name,
 ):
     """Create the geometryVariant VariantSet on *vset_path*.
 
@@ -131,23 +140,25 @@ def _author_variant_set(
     first_variant_name = None
     moved_children: set[str] = set()
 
-    for variant_name, child_name in child_entries:
+    for variant_name, child_names in variant_entries:
         if first_variant_name is None:
             first_variant_name = variant_name
 
         variant_spec = Sdf.VariantSpec(variant_set_spec, variant_name)
-        src_path = vset_path.AppendChild(child_name)
-        dst_path = variant_spec.primSpec.path.AppendChild(child_name)
 
-        if not Sdf.CopySpec(layer, src_path, layer, dst_path):
-            if diagnostics:
-                diagnostics.add_warning(
-                    f"Failed to copy '{src_path}' into variant "
-                    f"'{variant_name}'; skipping."
-                )
-            continue
+        for child_name in child_names:
+            src_path = vset_path.AppendChild(child_name)
+            dst_path = variant_spec.primSpec.path.AppendChild(child_name)
 
-        moved_children.add(child_name)
+            if not Sdf.CopySpec(layer, src_path, layer, dst_path):
+                if diagnostics:
+                    diagnostics.add_warning(
+                        f"Failed to copy '{src_path}' into variant "
+                        f"'{variant_name}'; skipping."
+                    )
+                continue
+
+            moved_children.add(child_name)
 
     for child_name in moved_children:
         if child_name in vset_spec.nameChildren:
