@@ -48,13 +48,22 @@ class BLENDERTORCP_OT_bake_export_background(Operator, ExportHelper):
         self.filename_ext = extension
         self.filter_glob = f"*{extension}"
 
+        settings_path = getattr(settings, "filepath", "")
         blend_path = Path(context.blend_data.filepath) if context.blend_data.filepath else None
         blend_name = blend_path.stem if blend_path else "untitled"
         blend_dir = blend_path.parent if blend_path else None
         last_path = addon_prefs.get_last_export_path(context, blend_path)
 
-        if last_path:
-            self.filepath = BLENDERTORCP_OT_export._enforce_extension(str(last_path), export_format)
+        if settings_path:
+            sp = Path(settings_path)
+            settings_dir = sp.parent if sp.suffix else sp
+            suggested = settings_dir / f"{blend_name}{extension}"
+            self.filepath = BLENDERTORCP_OT_export._enforce_extension(str(suggested), export_format)
+        elif last_path:
+            lp = Path(last_path)
+            last_dir = lp.parent if lp.suffix else lp
+            suggested = last_dir / f"{blend_name}{extension}"
+            self.filepath = BLENDERTORCP_OT_export._enforce_extension(str(suggested), export_format)
         elif blend_dir:
             suggested = blend_dir / f"{blend_name}{extension}"
             self.filepath = BLENDERTORCP_OT_export._enforce_extension(str(suggested), export_format)
