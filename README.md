@@ -10,7 +10,7 @@ Blender add-on to export USD/USDZ and rewrite Blender materials into Reality Com
 - Animation compatibility: actions can be concatenated for export and authored into a Reality Composer Pro animation library.
 - Background Bake & Export: runs baking and export in a second Blender process, writes status/log files, and keeps the UI responsive.
 - Material variants: define multiple named material sets per object and export them as USD `materialVariant` VariantSets, switchable in Reality Composer Pro.
-- Geometry variants: define multiple mesh alternatives on an object and export them as USD `geometryVariant` VariantSets for runtime geometry switching in Reality Composer Pro.
+- Geometry variants: define named geometry variants with one or more mesh targets per variant and export them as USD `geometryVariant` VariantSets for runtime geometry switching in Reality Composer Pro.
 - Shader authoring helpers: insert RealityKit PBR or Unlit node groups, browse a generated RealityKit node menu, and validate active materials in the Shader Editor.
 
 ## Important note
@@ -143,25 +143,36 @@ During USD export the add-on:
 The first variant is selected by default. In Reality Composer Pro the variant dropdown appears on the Xform, allowing you to switch materials at authoring time or at runtime via the RealityKit API.
 
 ## Geometry variants
-Geometry variants let you define multiple mesh alternatives on a single object and export them as USD `geometryVariant` VariantSets. Switching the variant in Reality Composer Pro swaps the visible geometry at authoring time or at runtime via the RealityKit API.
+Geometry variants let you define named geometry variants on a single object, each containing one or more mesh targets, and export them as USD `geometryVariant` VariantSets. Switching the variant in Reality Composer Pro swaps the visible geometry at authoring time or at runtime via the RealityKit API.
 
 ### Blender setup
 Geometry variants require a parent-child hierarchy in Blender:
 
 1. Create an Empty (or use an existing mesh object) as the variant owner.
-2. Parent the alternative mesh objects under it (`Ctrl+P > Object`).
+2. Parent the mesh objects under it (`Ctrl+P > Object`).
 3. Select the owner and open `Properties > Object > USD Geometry Variants`.
-4. Click `+` to add a variant. Give it a name and pick the target mesh in the "Mesh Object" field.
-5. Repeat for each alternative geometry.
-6. Use `Preview` to toggle visibility in Blender and verify each variant.
+4. Click `+` to add a named variant.
+5. In the "Mesh Targets" sub-list, click `+` to add one or more mesh targets to the variant and assign each to a mesh object.
+6. Repeat steps 4-5 for each alternative geometry configuration.
+7. Use `Preview` to toggle visibility in Blender and verify each variant.
+
+A variant can contain a single mesh or several meshes. This lets you build variants that are assemblies of multiple parts (e.g. a "Damaged" variant showing a cracked hull and debris pieces).
 
 Example hierarchy:
 ```
 MyAsset          (Empty — variant owner)
-  ├── LowPoly   (Mesh — variant target)
-  ├── HighPoly   (Mesh — variant target)
-  └── Damaged    (Mesh — variant target)
+  ├── LowPoly   (Mesh)
+  ├── HighPoly   (Mesh)
+  ├── Hull       (Mesh)
+  └── Debris     (Mesh)
 ```
+
+Example variant definitions:
+| Variant   | Mesh Targets         |
+|-----------|----------------------|
+| LowPoly  | LowPoly              |
+| HighPoly  | HighPoly             |
+| Damaged   | Hull, Debris         |
 
 The panel warns if a target mesh is not parented under the owner.
 
@@ -169,7 +180,7 @@ The panel warns if a target mesh is not parented under the owner.
 During USD export the add-on:
 - Locates the Xform prim that corresponds to the variant owner.
 - Creates a `geometryVariant` VariantSet on that Xform.
-- Copies each target child prim spec (including all descendant prims, material bindings, and material variants) into the corresponding variant body.
+- Copies all target child prim specs for each variant (including all descendant prims, material bindings, and material variants) into the corresponding variant body.
 - Removes the original child prim specs from the Xform so only the active variant's geometry exists at any time.
 - Sets the first variant as the default selection.
 
