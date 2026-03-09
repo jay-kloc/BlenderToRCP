@@ -9,6 +9,7 @@ Blender add-on to export USD/USDZ and rewrite Blender materials into Reality Com
 - Portable exports: textures and auxiliary assets are staged next to the USD and rewritten to relative paths.
 - Animation compatibility: actions can be concatenated for export and authored into a Reality Composer Pro animation library.
 - Background Bake & Export: runs baking and export in a second Blender process, writes status/log files, and keeps the UI responsive.
+- Material variants: define multiple named material sets per object and export them as USD `materialVariant` VariantSets, switchable in Reality Composer Pro.
 - Shader authoring helpers: insert RealityKit PBR or Unlit node groups, browse a generated RealityKit node menu, and validate active materials in the Shader Editor.
 
 ## Important note
@@ -20,6 +21,7 @@ This repo supports two workflows:
 
 ## Where to find it in Blender
 - `3D View > Sidebar > RCP Exporter`: main export UI, advanced USD export settings, bake settings, job monitor, and diagnostics access.
+- `3D View > Sidebar > RCP Exporter > Material Variants`: define, apply, and update material variant sets per object.
 - `Shader Editor > Sidebar > RCP Exporter > RealityKit Compatibility`: validate the active material and select offending nodes.
 - `Shader Editor > Sidebar > RCP Exporter > RealityKit Authoring`: insert RealityKit PBR or Unlit node groups.
 - `Shader Editor > Add > RealityKit Nodes`: insert generated RealityKit node groups from the bundled node catalog.
@@ -118,6 +120,25 @@ Bake modes:
 - `Lit (IBL baked)`: bakes the appearance under an image-based light, then still exports the final materials as RealityKit Unlit materials with the baked lighting encoded into textures.
 - `Isolate Meshes (Lit)`: hides non-target meshes during lit bakes to avoid cross-mesh shadow contribution.
 - `Image Format`: baked textures can be written as `.png` or `.avif`; AVIF support requires Blender 5.1+, and older builds warn and fall back to PNG.
+
+## Material variants
+Material variants let you define multiple named material configurations on a single object and export them as USD `materialVariant` VariantSets.
+
+### Defining variants in Blender
+1. Select an object that has at least one material slot.
+2. Open `3D View > Sidebar > RCP Exporter > Material Variants`.
+3. Click `+` to capture the current material slot assignments as a new named variant.
+4. Change the object's material slots and click `+` again to create additional variants.
+5. Use `Apply` to swap the object's live materials to a selected variant, or `Update` to overwrite a variant with the current slot assignments.
+
+### How it exports
+During USD export the add-on:
+- Creates any variant-referenced materials that are not already on the stage.
+- Places a `materialVariant` VariantSet on the parent Xform prim.
+- Authors `material:binding` inside each variant via `over` on the child mesh prim.
+- Clears any local `material:binding` on the mesh so the variant opinion wins (USD LIVRPS composition rules).
+
+The first variant is selected by default. In Reality Composer Pro the variant dropdown appears on the Xform, allowing you to switch materials at authoring time or at runtime via the RealityKit API.
 
 ## Material authoring and diagnostics
 BlenderToRCP is not export-only. The Shader Editor integration also supports:
