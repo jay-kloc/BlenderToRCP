@@ -17,3 +17,8 @@ dist/
 
 # Background bake/export jobs
 .blendertorcp_jobs/
+
+#test folders
+exports/
+sample3d/
+textures/
