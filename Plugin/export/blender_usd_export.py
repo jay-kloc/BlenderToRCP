@@ -131,6 +131,7 @@ def export_blender_scene(context, settings, final_path: str, diagnostics=None) -
             'export_uvmaps': bool(getattr(settings, "export_uvmaps", True)),
             'rename_uvmaps': bool(getattr(settings, "rename_uvmaps", True)),
             'export_normals': bool(getattr(settings, "export_normals", True)),
+            'export_tangents': bool(getattr(settings, "export_tangents", True)),
             'export_materials': True,  # We'll rewrite these, but need initial export
             'export_textures': False,  # We'll handle textures separately
             'use_instancing': bool(getattr(settings, "use_instancing", True)),
@@ -181,6 +182,15 @@ def export_blender_scene(context, settings, final_path: str, diagnostics=None) -
 
         # Call Blender's USD exporter
         # Note: In Blender 5.0+, this is available as an operator
+        if (
+            diagnostics
+            and bool(getattr(settings, "export_tangents", True))
+            and not _supports_export_kwarg(bpy.ops.wm.usd_export, "export_tangents")
+        ):
+            diagnostics.add_warning(
+                "Blender USD exporter does not expose tangent export in this Blender version; custom tangent primvars will be authored during post-process when possible."
+            )
+
         export_kwargs = _filter_export_kwargs(bpy.ops.wm.usd_export, export_kwargs)
         bpy.ops.wm.usd_export(**export_kwargs)
         
@@ -231,6 +241,7 @@ def get_export_settings(context, settings) -> dict:
         'export_uvmaps': bool(getattr(settings, "export_uvmaps", True)),
         'rename_uvmaps': bool(getattr(settings, "rename_uvmaps", True)),
         'export_normals': bool(getattr(settings, "export_normals", True)),
+        'export_tangents': bool(getattr(settings, "export_tangents", True)),
         'export_materials': True,
         'export_textures': False,
         'use_instancing': bool(getattr(settings, "use_instancing", True)),
@@ -279,6 +290,14 @@ def _filter_export_kwargs(operator, kwargs: dict) -> dict:
     except Exception:
         return kwargs
     return {key: value for key, value in kwargs.items() if key in valid_props}
+
+
+def _supports_export_kwarg(operator, key: str) -> bool:
+    """Return True when the Blender USD exporter exposes *key*."""
+    try:
+        return key in {prop.identifier for prop in operator.get_rna_type().properties}
+    except Exception:
+        return False
 
 
 def _usd_format_for_path(output_path: str) -> str:

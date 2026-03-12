@@ -263,7 +263,7 @@ class MaterialXGraphBuilder:
             inputs['roughness'] = self._create_texture_input(
                 material_data['roughness_texture'],
                 'float',
-                channel=material_data.get('roughness_texture_channel', 'g'),
+                channel=material_data.get('roughness_texture_channel', 'r'),
                 texcoord=material_data.get('roughness_texture_texcoord'),
                 mapping=material_data.get('roughness_texture_mapping'),
                 colorspace=material_data.get('roughness_texture_colorspace'),

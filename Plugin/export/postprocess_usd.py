@@ -5,8 +5,10 @@ Runs scene normalization, material rewriting, and texture preparation.
 """
 
 from .materials.rewrite import rewrite_materials
+from .pbr_texture_packing import pack_orm_textures
 from .usd_animation_library import author_animation_library
 from .usd_scene import normalize_scene
+from .usd_tangents import author_mesh_tangents
 from .usd_textures import prepare_textures
 from .usd_assets import prepare_assets
 from .usd_variants import author_material_variants
@@ -23,8 +25,15 @@ def process_usd_stage(usd_path: str, settings, context, diagnostics=None) -> Non
         raise RuntimeError(f"Failed to open USD stage: {usd_path}")
 
     normalize_scene(stage, settings)
+    author_mesh_tangents(stage, context, settings, diagnostics)
 
-    rewrite_materials(stage, settings, context, diagnostics)
+    material_mode = getattr(settings, "material_mode", "SHADER_GRAPH")
+
+    if material_mode == 'SHADER_GRAPH':
+        rewrite_materials(stage, settings, context, diagnostics)
+    elif material_mode == 'PBR' and getattr(settings, "pack_orm_textures", False):
+        orm_resolution = int(getattr(settings, "orm_texture_resolution", "1024"))
+        pack_orm_textures(stage, usd_path, context, diagnostics, orm_resolution=orm_resolution)
 
     author_material_variants(stage, context, settings, diagnostics)
 

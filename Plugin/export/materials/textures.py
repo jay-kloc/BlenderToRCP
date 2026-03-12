@@ -145,6 +145,8 @@ def _create_texture_connection(
         nodedef_name, output_sdf_type = _image_nodedef_for_output(manifest, image_type)
         node_id = _texture_node_id_from_nodedef(nodedef_name)
         current_type = image_type
+        if current_type == 'float':
+            channel = ''
 
     if _is_ktx_required(manifest, node_id) and not _is_ktx_path(texture_path):
         if diagnostics:
@@ -208,8 +210,9 @@ def _create_texture_connection(
     # Color space is handled by Reality Composer Pro; avoid injecting conversion nodes.
 
     if texture_kind == 'normal_texture':
-        # Blender's Normal Map node corresponds to ShaderGraph/MaterialX `normalmap`
-        # (transforms tangent/object-space normal vectors into world space).
+        # RealityKit's PBR surface shader internally applies `normalmap` to its
+        # normal input, so texture samples must only be decoded from [0,1] to
+        # [-1,1] here rather than transformed to world space.
         if current_type != 'vector3':
             texture_output = _create_convert_output(
                 manifest,
@@ -223,36 +226,21 @@ def _create_texture_connection(
             )
             current_type = 'vector3'
 
-        normalmap_nodedef = select_nodedef_name_for_node(
+        decode_nodedef = select_nodedef_name_for_node(
             manifest,
-            "normalmap",
+            "normal_map_decode",
             output_type="vector3",
-        ) or "ND_normalmap"
+        ) or "ND_normal_map_decode"
 
-        normalmap_name = _sanitize_name(f"NormalMap_{input_name}")
-        normalmap_prim = stage.DefinePrim(f"{nodegraph_path}/{normalmap_name}", "Shader")
-        normalmap_shader = UsdShade.Shader(normalmap_prim)
-        normalmap_shader.CreateIdAttr(normalmap_nodedef)
+        decode_name = _sanitize_name(f"NormalDecode_{input_name}")
+        decode_prim = stage.DefinePrim(f"{nodegraph_path}/{decode_name}", "Shader")
+        decode_shader = UsdShade.Shader(decode_prim)
+        decode_shader.CreateIdAttr(decode_nodedef)
 
-        in_input = normalmap_shader.CreateInput("in", Sdf.ValueTypeNames.Float3)
+        in_input = decode_shader.CreateInput("in", Sdf.ValueTypeNames.Float3)
         in_input.ConnectToSource(texture_output)
 
-        # Optional strength hook (defaults to 1.0 if omitted).
-        strength = texture_spec.get("scale")
-        if strength is not None:
-            try:
-                strength_value = float(strength)
-            except Exception:
-                strength_value = None
-            if strength_value is not None and abs(strength_value - 1.0) > 1e-6:
-                normalmap_shader.CreateInput("scale", Sdf.ValueTypeNames.Float).Set(strength_value)
-
-        # Optional space override (defaults to tangent).
-        space = (texture_spec.get("space") or "").strip().lower()
-        if space in {"tangent", "object"}:
-            normalmap_shader.CreateInput("space", Sdf.ValueTypeNames.String).Set(space)
-
-        return normalmap_shader.CreateOutput("out", Sdf.ValueTypeNames.Float3)
+        return decode_shader.CreateOutput("out", Sdf.ValueTypeNames.Float3)
 
     texture_output, current_type = _resolve_texture_output(
         manifest,
@@ -409,48 +397,6 @@ def _create_place2d_node(
     return place_shader.CreateOutput("out", Sdf.ValueTypeNames.Float2)
 
 
-def _apply_srgb_to_linear(
-    manifest: Dict[str, Any],
-    stage,
-    nodegraph_path: str,
-    input_name: str,
-    source_output,
-    output_type: str,
-):
-    """Apply an approximate sRGB-to-linear conversion using a power node."""
-    nodedef_name = select_nodedef_name_for_node(
-        manifest,
-        "power",
-        output_type=output_type,
-    )
-    if not nodedef_name:
-        return None
-
-    const_name = _sanitize_name(f"srgb_exp_{input_name}")
-    const_prim = stage.DefinePrim(f"{nodegraph_path}/{const_name}", "Shader")
-    const_shader = UsdShade.Shader(const_prim)
-    const_shader.CreateIdAttr(select_nodedef_name_for_node(manifest, "constant", output_type=output_type))
-
-    exponent = 2.2
-    if output_type == 'color4':
-        value = (exponent, exponent, exponent, exponent)
-    else:
-        value = (exponent, exponent, exponent)
-    const_shader.CreateInput("value", _map_mtlx_type_to_sdf(output_type)).Set(value)
-    const_output = const_shader.CreateOutput("out", _map_mtlx_type_to_sdf(output_type))
-
-    pow_name = _sanitize_name(f"srgb_to_linear_{input_name}")
-    pow_prim = stage.DefinePrim(f"{nodegraph_path}/{pow_name}", "Shader")
-    pow_shader = UsdShade.Shader(pow_prim)
-    pow_shader.CreateIdAttr(nodedef_name)
-
-    pow_in1 = pow_shader.CreateInput("in1", _map_mtlx_type_to_sdf(output_type))
-    pow_in1.ConnectToSource(source_output)
-    pow_in2 = pow_shader.CreateInput("in2", _map_mtlx_type_to_sdf(output_type))
-    pow_in2.ConnectToSource(const_output)
-    return pow_shader.CreateOutput("out", _map_mtlx_type_to_sdf(output_type))
-
-
 def _create_scale_output(
     manifest: Dict[str, Any],
     stage,
@@ -542,10 +488,15 @@ def _image_output_hint(output_type: str, channel: str, texture_kind: Optional[st
         return 'vector3'
     if output_type in ('vector3', 'vector2'):
         return 'color3'
+    # Float data from a single-channel or R-channel read uses ND_image_float
+    # to avoid color-space conversion.  Multi-channel extraction (G, B, A)
+    # still requires color3/color4 + swizzle.
+    if output_type == 'float' and channel in ('', 'r'):
+        return 'float'
     if output_type == 'float' and channel:
         return 'color3'
     if output_type == 'float':
-        return 'color3'
+        return 'float'
     return 'color3'
 
 
@@ -569,6 +520,9 @@ def _resolve_texture_output(
     current_type = (current_type or '').lower()
     desired_type = (desired_type or '').lower()
     channel = (channel or '').lower()
+
+    if current_type == desired_type and not channel:
+        return texture_output, current_type
 
     if desired_type == 'float' and not channel:
         channel = 'r'

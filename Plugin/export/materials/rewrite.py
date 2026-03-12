@@ -25,7 +25,7 @@ def rewrite_materials(stage, settings, context, diagnostics=None) -> None:
     created_materials = {}
 
     for prim in stage.Traverse():
-        if not prim.IsA(UsdGeom.Mesh):
+        if not (prim.IsA(UsdGeom.Mesh) or prim.IsA(UsdGeom.Subset)):
             continue
 
         material_binding = UsdShade.MaterialBindingAPI(prim)

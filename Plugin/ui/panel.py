@@ -286,6 +286,13 @@ class BlenderToRCPExportSettings(PropertyGroup):
         update=_on_settings_changed,
     )
 
+    export_tangents: BoolProperty(
+        name="Tangents",
+        description="Include tangents of exported meshes when supported by Blender's USD exporter",
+        default=True,
+        update=_on_settings_changed,
+    )
+
     merge_parent_xform: BoolProperty(
         name="Merge Parent Xform",
         description="Merge parent transforms into geometry",
@@ -488,6 +495,40 @@ class BlenderToRCPExportSettings(PropertyGroup):
         update=_on_settings_changed,
     )
 
+    material_mode: EnumProperty(
+        name="Material Mode",
+        description="Choose how materials are exported for RCP",
+        items=[
+            ('SHADER_GRAPH', "Shader Graph", "Rewrite to MaterialX Shader Graph materials"),
+            ('PBR', "PBR", "Keep Blender's UsdPreviewSurface PBR materials"),
+        ],
+        default='SHADER_GRAPH',
+        update=_on_settings_changed,
+    )
+
+    pack_orm_textures: BoolProperty(
+        name="Pack ORM Textures",
+        description="Pack AO, Roughness and Metallic into a single ORM texture (R=AO, G=Roughness, B=Metallic)",
+        default=True,
+        update=_on_settings_changed,
+    )
+
+    orm_texture_resolution: EnumProperty(
+        name="ORM Resolution",
+        description="Resolution of the packed ORM texture",
+        items=[
+            ('64', "64", ""),
+            ('128', "128", ""),
+            ('256', "256", ""),
+            ('512', "512", ""),
+            ('1024', "1024", ""),
+            ('2048', "2048", ""),
+            ('4096', "4096", ""),
+        ],
+        default='1024',
+        update=_on_settings_changed,
+    )
+
     force_unlit_materials: BoolProperty(
         name="Force Unlit Materials",
         description="Force rewrite to RealityKit Unlit materials",
@@ -560,6 +601,11 @@ class BLENDERTORCP_PT_export_panel(Panel):
             export_box.enabled = not _is_job_running(settings)
             export_box.prop(settings, "filepath")
             export_box.prop(settings, "export_format")
+            export_box.prop(settings, "material_mode")
+            if settings.material_mode == 'PBR':
+                export_box.prop(settings, "pack_orm_textures")
+                if settings.pack_orm_textures:
+                    export_box.prop(settings, "orm_texture_resolution")
 
             actions_box = layout.box()
             actions_box.label(text="Actions", icon='PLAY')
@@ -726,6 +772,7 @@ class BLENDERTORCP_PT_export_usd_geometry(Panel):
         layout.prop(settings, "export_uvmaps")
         layout.prop(settings, "rename_uvmaps")
         layout.prop(settings, "export_normals")
+        layout.prop(settings, "export_tangents")
         layout.prop(settings, "merge_parent_xform")
         layout.prop(settings, "triangulate_meshes")
         if settings.triangulate_meshes:
