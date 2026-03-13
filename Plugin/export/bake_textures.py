@@ -398,18 +398,18 @@ def restore_baked_materials(result: BakeResult, keep_baked_materials: bool) -> N
             obj.material_slots[idx].material = mat
 
     for mat in list(result.baked_materials):
-        if mat.users == 0:
-            try:
+        try:
+            if mat.users == 0:
                 bpy.data.materials.remove(mat)
-            except Exception:
-                pass
+        except (ReferenceError, Exception):
+            pass
 
     for image in list(result.baked_images):
-        if image.users == 0:
-            try:
+        try:
+            if image.users == 0:
                 bpy.data.images.remove(image)
-            except Exception:
-                pass
+        except (ReferenceError, Exception):
+            pass
 
 
 def _resolve_bake_resolution(settings) -> int:

@@ -17,3 +17,6 @@ dist/
 
 # Background bake/export jobs
 .blendertorcp_jobs/
+
+# Test output
+tests/tmp/
