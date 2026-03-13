@@ -3,6 +3,8 @@
 Blender add-on to export USD/USDZ and rewrite Blender materials into Reality Composer Pro compatible MaterialX ShaderGraph graphs.
 
 ## Key features
+
+- **CLI remote control**: export, bake, validate, and manage settings from the terminal — no Blender UI needed.
 - Export `.usda`, `.usdc`, or `.usdz` from Blender with a Reality Composer Pro friendly pipeline.
 - Strict material validation: unsupported nodes fail export with copy/pasteable errors instead of silently degrading.
 - RealityKit material rewrite: supported Blender shader graphs are rewritten into MaterialX graphs that Reality Composer Pro can edit.
@@ -14,8 +16,9 @@ Blender add-on to export USD/USDZ and rewrite Blender materials into Reality Com
 ## Important note
 This is still a strict, compatibility-first exporter. Node coverage and graph translation are intentionally limited, and some Blender materials or scene setups will fail export until explicit support is added. When export succeeds, validate the result in Reality Composer Pro or with the repo validation scripts before relying on it in production.
 
-This repo supports two workflows:
+This repo supports three workflows:
 - Install the Blender add-on.
+- Use the CLI to control exports from the terminal or an AI agent.
 - Contribute to the add-on.
 
 ## Where to find it in Blender
@@ -29,6 +32,68 @@ This repo supports two workflows:
 2. In Blender, open `Edit > Preferences > Extensions > Add-ons > Install from Disk...`.
 3. Select `BlenderToRCP.zip`.
 4. Enable `BlenderToRCP` in the add-ons list.
+
+## CLI
+
+BlenderToRCP includes a command-line interface that can export, bake, validate, and manage settings without opening the Blender UI. Every command spawns `blender --background`, runs the requested operation, and returns JSON to stdout.
+
+### Quick start
+
+```bash
+# Set the Blender path (add to ~/.zshrc or ~/.bashrc)
+export BLENDERTORCP_BLENDER="/Applications/Blender.app/Contents/MacOS/Blender"
+
+# Create an alias for convenience
+alias blendertorcp="python3 /path/to/Plugin"
+
+# Test the connection
+blendertorcp version
+```
+
+### Usage examples
+
+```bash
+# Scene inspection
+blendertorcp info scene.blend
+blendertorcp list-objects scene.blend --type MESH
+blendertorcp list-materials scene.blend
+
+# Validate materials for RealityKit compatibility
+blendertorcp validate scene.blend --strict
+
+# Export to USDZ
+blendertorcp export scene.blend -o output.usdz --format USDZ
+
+# Bake textures and export
+blendertorcp bake-export scene.blend -o output.usdz --resolution 2048
+
+# Read and modify settings
+blendertorcp settings get scene.blend --group bake
+blendertorcp settings set scene.blend export_format=USDZ --dry-run
+```
+
+For the full command reference see [`docs/CLI.md`](docs/CLI.md).
+
+## AI agent skills
+
+This repo ships two [OpenAI-format skills](https://skills.sh) that let AI agents (Claude, ChatGPT, Copilot, etc.) drive BlenderToRCP from natural language.
+
+### Install skills
+
+```bash
+npx skills add tomkrikorian/BlenderToRCP
+```
+
+Browse and discover skills at [skills.sh](https://skills.sh).
+
+### Available skills
+
+| Skill | Description |
+|-------|-------------|
+| `blendertorcp-cli` | Export scenes, bake textures, validate materials, and manage settings via the CLI. |
+| `blendertorcp-setup` | Set up the CLI — locate Blender, verify the plugin, configure the shell alias. Also covers troubleshooting. |
+
+Once installed, an agent can respond to prompts like "export my Blender scene to USDZ" or "bake and export Robot.blend at 4K resolution" by invoking the CLI commands automatically.
 
 ## Contribute to the Blender add-on
 
