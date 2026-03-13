@@ -98,21 +98,42 @@ def run(
         if proc.stderr:
             print(proc.stderr, file=sys.stderr)
 
-    # Extract JSON from stdout
-    stdout = proc.stdout or ""
+    return extract_result(proc.stdout or "", proc.stderr or "", proc.returncode, blender)
+
+
+def extract_result(
+    stdout: str,
+    stderr: str,
+    returncode: int,
+    blender: str = "blender",
+) -> dict:
+    """Extract the JSON result from Blender's stdout.
+
+    Split out from :func:`run` so it can be unit-tested without spawning
+    a subprocess.
+
+    Returns
+    -------
+    dict
+        The ``result`` value from the API response on success.
+
+    Raises
+    ------
+    RuntimeError
+        On any failure (missing markers, invalid JSON, command error, etc.).
+    """
     pattern = re.escape(OUTPUT_MARKER) + r"(.+?)" + re.escape(OUTPUT_MARKER)
     match = re.search(pattern, stdout, re.DOTALL)
 
     if not match:
-        # No JSON found — try to provide useful error info
-        snippet = (proc.stderr or stdout)[-500:]
-        if proc.returncode == 127:
+        snippet = (stderr or stdout)[-500:]
+        if returncode == 127:
             raise RuntimeError(
                 f"Blender not found at '{blender}'. "
                 "Set BLENDERTORCP_BLENDER or use --blender <path>."
             )
         raise RuntimeError(
-            f"No output from Blender (exit code {proc.returncode}). "
+            f"No output from Blender (exit code {returncode}). "
             f"Last output:\n{snippet}"
         )
 
