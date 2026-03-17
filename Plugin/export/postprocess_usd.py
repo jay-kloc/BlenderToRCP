@@ -13,6 +13,10 @@ from .usd_textures import prepare_textures
 from .usd_assets import prepare_assets
 from .usd_variants import author_material_variants
 from .usd_geometry_variants import author_geometry_variants
+from .usd_variants_realitykit import (
+    author_material_variants_realitykit,
+    author_geometry_variants_realitykit,
+)
 from .usd_utils import Usd, require_pxr
 
 
@@ -35,9 +39,14 @@ def process_usd_stage(usd_path: str, settings, context, diagnostics=None) -> Non
         orm_resolution = int(getattr(settings, "orm_texture_resolution", "1024"))
         pack_orm_textures(stage, usd_path, context, diagnostics, orm_resolution=orm_resolution)
 
-    author_material_variants(stage, context, settings, diagnostics)
+    variant_mode = getattr(settings, "variant_mode", "RCP")
 
-    author_geometry_variants(stage, context, settings, diagnostics)
+    if variant_mode == "REALITYKIT":
+        author_material_variants_realitykit(stage, context, settings, diagnostics)
+        author_geometry_variants_realitykit(stage, context, settings, diagnostics)
+    else:
+        author_material_variants(stage, context, settings, diagnostics)
+        author_geometry_variants(stage, context, settings, diagnostics)
 
     author_animation_library(stage, settings, diagnostics)
 

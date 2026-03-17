@@ -529,6 +529,19 @@ class BlenderToRCPExportSettings(PropertyGroup):
         update=_on_settings_changed,
     )
 
+    variant_mode: EnumProperty(
+        name="Variant Mode",
+        description="Choose where USD VariantSets are authored. "
+                    "RCP places them on per-object Xforms (editable in Reality Composer Pro). "
+                    "RealityKit places them on the default prim (required for QuickLook and RealityKit API switching)",
+        items=[
+            ('RCP', "RCP (deprecated)", "Author VariantSets on per-object Xform prims (Reality Composer Pro)"),
+            ('REALITYKIT', "RealityKit", "Author VariantSets on the default prim (QuickLook / RealityKit API)"),
+        ],
+        default='REALITYKIT',
+        update=_on_settings_changed,
+    )
+
     force_unlit_materials: BoolProperty(
         name="Force Unlit Materials",
         description="Force rewrite to RealityKit Unlit materials",
@@ -606,6 +619,9 @@ class BLENDERTORCP_PT_export_panel(Panel):
                 export_box.prop(settings, "pack_orm_textures")
                 if settings.pack_orm_textures:
                     export_box.prop(settings, "orm_texture_resolution")
+            variant_row = export_box.row()
+            variant_row.enabled = False
+            variant_row.prop(settings, "variant_mode")
 
             actions_box = layout.box()
             actions_box.label(text="Actions", icon='PLAY')

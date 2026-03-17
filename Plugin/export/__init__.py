@@ -19,4 +19,7 @@ __all__ = [
     'usd_animation_library',
     'usd_textures',
     'usd_utils',
+    'usd_variants',
+    'usd_geometry_variants',
+    'usd_variants_realitykit',
 ]
