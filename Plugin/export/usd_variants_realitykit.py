@@ -107,10 +107,11 @@ def author_material_variants_realitykit(
             obj, geom_subsets, existing_materials,
         )
 
-        _clear_direct_binding(mesh_prim, layer)
-        if geom_subsets and slot_to_subset:
-            for subset_prim in slot_to_subset.values():
-                _clear_direct_binding(subset_prim, layer)
+        # Do NOT clear material:binding in RealityKit mode.
+        # The materialVariant is listed first in variantSetNames,
+        # so its opinions win via USD composition ordering.
+        # Keeping the original bindings ensures geometry variant
+        # copies (CopySpec) preserve correct material assignments.
 
         vset_name = f"{_sanitize_name(obj_name)}_materialVariant"
 
@@ -156,7 +157,13 @@ def author_material_variants_realitykit(
 def author_geometry_variants_realitykit(
     stage, context, settings, diagnostics=None,
 ) -> None:
-    """Author per-object geometryVariant VariantSets on the default prim."""
+    """Author per-object geometryVariant VariantSets on the default prim.
+
+    Copies child prim specs into each variant body and removes the
+    originals from the parent Xform.  RealityKit requires the full
+    prim tree inside each variant body to swap geometry on variant
+    switch -- visibility toggling is not supported in this context.
+    """
     require_pxr()
 
     objects_with_variants = _collect_objects_with_geometry_variants(context)
@@ -200,7 +207,9 @@ def author_geometry_variants_realitykit(
         if vset_name not in default_spec.variantSets:
             Sdf.VariantSetSpec(default_spec, vset_name)
 
-        _merge_variant_set_name(default_spec, vset_name)
+        # Append (not prepend) so material variant names stay first
+        # in variantSetNames and win in USD composition ordering.
+        _append_variant_set_name(default_spec, vset_name)
 
         variant_set_spec = default_spec.variantSets[vset_name]
         first_variant_name = None
@@ -353,23 +362,6 @@ def _author_material_binding_rel(prim_spec, material_path: str):
 # Clear helpers
 # ===================================================================
 
-def _clear_direct_binding(prim, layer=None) -> None:
-    """Remove a direct ``material:binding`` so variant opinions win."""
-    try:
-        prim.RemoveProperty("material:binding")
-    except Exception:
-        pass
-    if layer:
-        prim_spec = layer.GetPrimAtPath(prim.GetPath())
-        if prim_spec:
-            try:
-                rel = prim_spec.relationships.get("material:binding")
-                if rel:
-                    prim_spec.RemoveProperty(rel)
-            except Exception:
-                pass
-
-
 # ===================================================================
 # VariantSet name merging
 # ===================================================================
@@ -382,6 +374,26 @@ def _merge_variant_set_name(prim_spec, name: str):
         existing = list(info.prependedItems or [])
     if name not in existing:
         existing.insert(0, name)
+    prim_spec.SetInfo(
+        "variantSetNames",
+        Sdf.StringListOp.Create(prependedItems=existing),
+    )
+
+
+def _append_variant_set_name(prim_spec, name: str):
+    """Append *name* to the prim's ``variantSetNames`` list op.
+
+    Unlike ``_merge_variant_set_name`` (which prepends), this keeps
+    already-registered names at the front so they have higher
+    composition strength.  Used for geometry variants so that
+    material variant opinions win.
+    """
+    existing = []
+    info = prim_spec.GetInfo("variantSetNames")
+    if info:
+        existing = list(info.prependedItems or [])
+    if name not in existing:
+        existing.append(name)
     prim_spec.SetInfo(
         "variantSetNames",
         Sdf.StringListOp.Create(prependedItems=existing),

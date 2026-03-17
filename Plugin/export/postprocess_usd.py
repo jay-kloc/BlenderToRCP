@@ -42,6 +42,11 @@ def process_usd_stage(usd_path: str, settings, context, diagnostics=None) -> Non
     variant_mode = getattr(settings, "variant_mode", "RCP")
 
     if variant_mode == "REALITYKIT":
+        # Material variants run first so they can find all mesh prims
+        # (before geometry variants move some into variant bodies).
+        # Material bindings are NOT cleared in RealityKit mode;
+        # the materialVariant is listed first in variantSetNames so
+        # its opinions win via USD composition ordering.
         author_material_variants_realitykit(stage, context, settings, diagnostics)
         author_geometry_variants_realitykit(stage, context, settings, diagnostics)
     else:
