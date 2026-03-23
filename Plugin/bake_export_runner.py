@@ -20,17 +20,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from Plugin.api.addon_loader import ensure_addon_loaded as _load_blendertorcp_addon
+
 
 def _ensure_addon_loaded() -> None:
-    if hasattr(bpy.types.Scene, "blender_to_rcp_export_settings"):
-        return
-    for module_name in ("bl_ext.blender_local_addons.BlenderToRCP", "BlenderToRCP"):
-        try:
-            bpy.ops.preferences.addon_enable(module=module_name)
-        except Exception:
-            continue
-        if hasattr(bpy.types.Scene, "blender_to_rcp_export_settings"):
-            return
+    _load_blendertorcp_addon()
 
 
 def _update_status(

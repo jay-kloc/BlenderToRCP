@@ -43,11 +43,16 @@ BlenderToRCP includes a command-line interface that can export, bake, validate, 
 # Set the Blender path (add to ~/.zshrc or ~/.bashrc)
 export BLENDERTORCP_BLENDER="/Applications/Blender.app/Contents/MacOS/Blender"
 
-# Create an alias for convenience
-alias blendertorcp="python3 /path/to/Plugin"
+# Create an alias for convenience.
+# Installed extension:
+alias blendertorcp="python3 /path/to/BlenderToRCP"
+# Or, for a development checkout:
+# alias blendertorcp="python3 /path/to/repo/Plugin"
 
 # Test the connection
 blendertorcp version
+blendertorcp preferences get
+blendertorcp settings list
 ```
 
 ### Usage examples
@@ -116,20 +121,29 @@ git lfs install
 git lfs pull
 ```
 
-2. Ensure Blender's user extension repository exists on macOS:
+2. Ensure Blender's user extension repository exists on macOS.
+Replace `<version>` with your installed Blender major.minor version, for example `5.1`:
 
 ```bash
-mkdir -p ~/Library/Application\ Support/Blender/5.0/extensions/user_default
+mkdir -p ~/Library/Application\ Support/Blender/<version>/extensions/user_default
 ```
 
 3. Symlink the add-on into Blender's extension repository:
 
 ```bash
 ln -s "<path-to-this-repo>/Plugin" \
-  "$HOME/Library/Application Support/Blender/5.0/extensions/user_default/BlenderToRCP"
+  "$HOME/Library/Application Support/Blender/<version>/extensions/user_default/BlenderToRCP"
 ```
 
 4. Enable the add-on in Blender.
+
+5. Verify the CLI against the checkout:
+
+```bash
+python3 "<path-to-this-repo>/Plugin" --blender /Applications/Blender.app/Contents/MacOS/Blender version
+python3 "<path-to-this-repo>/Plugin" --blender /Applications/Blender.app/Contents/MacOS/Blender preferences get
+python3 "<path-to-this-repo>/Plugin" --blender /Applications/Blender.app/Contents/MacOS/Blender settings list
+```
 
 ### Contributor quick start
 Run these when you change the corresponding subsystem:

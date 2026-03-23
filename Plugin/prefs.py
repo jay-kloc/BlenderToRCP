@@ -8,10 +8,21 @@ from pathlib import Path
 from bpy.props import StringProperty, BoolProperty, EnumProperty
 from bpy.types import AddonPreferences
 
+from .api.addon_loader import _candidate_module_names
 
-def get_addon_module_name() -> str:
+
+def get_addon_module_name(context=None) -> str:
     """Get the add-on module name for preferences lookup."""
-    if __package__:
+    if context is None:
+        context = bpy.context
+
+    addons = getattr(getattr(context, "preferences", None), "addons", None)
+    if addons is not None:
+        for addon_name in _candidate_module_names("BlenderToRCP"):
+            if addons.get(addon_name) is not None:
+                return addon_name
+
+    if __package__ and __package__ != "Plugin":
         return __package__
     return __name__.rpartition('.')[0] or __name__
 
@@ -109,7 +120,7 @@ def get_preferences(context=None):
     """Get add-on preferences"""
     if context is None:
         context = bpy.context
-    addon_name = get_addon_module_name()
+    addon_name = get_addon_module_name(context)
     addon = context.preferences.addons.get(addon_name)
     return addon.preferences if addon else None
 

@@ -15,28 +15,42 @@ The CLI ships inside the BlenderToRCP plugin — no separate installation needed
 export BLENDERTORCP_BLENDER=/Applications/Blender.app/Contents/MacOS/Blender
 ```
 
-### 2. Find your plugin install path
+### 2. Find your extension root
 
-The plugin is installed in Blender's extensions directory. Common locations:
+The CLI lives directly in the Blender extension root. Common locations:
 
-| Platform | Path |
+| Workflow | Path |
 |----------|------|
-| macOS | `~/Library/Application Support/Blender/<version>/extensions/.local/BlenderToRCP/` |
-| Linux | `~/.config/blender/<version>/extensions/.local/BlenderToRCP/` |
-| Windows | `%APPDATA%\Blender Foundation\Blender\<version>\extensions\.local\BlenderToRCP\` |
+| macOS installed extension | `~/Library/Application Support/Blender/<version>/extensions/.local/BlenderToRCP/` |
+| macOS development symlink | `~/Library/Application Support/Blender/<version>/extensions/user_default/BlenderToRCP/` |
+| Linux installed extension | `~/.config/blender/<version>/extensions/.local/BlenderToRCP/` |
+| Linux development symlink | `~/.config/blender/<version>/extensions/user_default/BlenderToRCP/` |
+| Windows installed extension | `%APPDATA%\Blender Foundation\Blender\<version>\extensions\.local\BlenderToRCP\` |
+| Windows development symlink | `%APPDATA%\Blender Foundation\Blender\<version>\extensions\user_default\BlenderToRCP\` |
+
+Look for `cli/__main__.py` and `api/runner.py` directly under that `BlenderToRCP/` directory. In a repository checkout, the equivalent directory is `<repo>/Plugin/`.
 
 ### 3. Run the CLI
 
 ```bash
-# Run directly from the plugin directory
-python3 /path/to/Plugin <command> [options]
+# Installed extension root
+python3 /path/to/BlenderToRCP version
+python3 /path/to/BlenderToRCP preferences get
+python3 /path/to/BlenderToRCP settings list
+
+# Development checkout
+python3 /path/to/repo/Plugin version
+python3 /path/to/repo/Plugin preferences get
+python3 /path/to/repo/Plugin settings list
 ```
 
 ### 4. (Optional) Create an alias for convenience
 
 ```bash
 # Add to your shell profile for easy access
-alias blendertorcp="python3 /path/to/Plugin"
+alias blendertorcp="python3 /path/to/BlenderToRCP"
+# Or for a repository checkout:
+# alias blendertorcp="python3 /path/to/repo/Plugin"
 ```
 
 Then use it as:

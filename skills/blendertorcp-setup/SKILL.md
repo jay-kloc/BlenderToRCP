@@ -11,7 +11,7 @@ Configure the BlenderToRCP CLI so the agent can export scenes, bake textures, va
 
 - Blender 5.0+ installed
 - BlenderToRCP addon installed and enabled in Blender's preferences
-- Python 3.10+ available as `python3`
+- Python 3 available as `python3`
 
 ## Inputs
 
@@ -34,39 +34,51 @@ which blender
 
 If nothing is found, ask the user for the path before proceeding.
 
-### 2. Locate the plugin install directory
+### 2. Locate the extension root
 
-The addon ships the CLI inside its `Plugin/` directory. Check the Blender extensions path:
+The addon ships the CLI directly in the extension root. Check Blender's extensions paths:
 
 ```bash
 # macOS
-find ~/Library/Application\ Support/Blender -path "*/BlenderToRCP/Plugin/cli/__main__.py" 2>/dev/null
+find ~/Library/Application\ Support/Blender \
+  \( -path "*/extensions/.local/BlenderToRCP/cli/__main__.py" -o \
+     -path "*/extensions/user_default/BlenderToRCP/cli/__main__.py" \) 2>/dev/null
 
 # Linux
-find ~/.config/blender -path "*/BlenderToRCP/Plugin/cli/__main__.py" 2>/dev/null
+find ~/.config/blender \
+  \( -path "*/extensions/.local/BlenderToRCP/cli/__main__.py" -o \
+     -path "*/extensions/user_default/BlenderToRCP/cli/__main__.py" \) 2>/dev/null
 ```
 
-For development installs, the `Plugin/` directory is at the repository root.
+For development installs, the CLI directory is `<repo>/Plugin/`, and the dev symlink usually points `.../extensions/user_default/BlenderToRCP` there.
 
-Verify the install by confirming both `Plugin/api/runner.py` and `Plugin/cli/__main__.py` exist.
+Verify the install by confirming both `cli/__main__.py` and `api/runner.py` exist in the resolved extension root. In a repo checkout, those files live under `Plugin/`.
 
 ### 3. Test the connection
 
-Run a version check to confirm Blender, Python, and the addon are all wired up:
+Run these checks to confirm Blender, Python, and the addon are all wired up:
 
 ```bash
-BLENDERTORCP_BLENDER=/path/to/blender python3 /path/to/Plugin version
-# Or pass --blender directly:
-python3 /path/to/Plugin --blender /path/to/blender version
+# Installed extension root
+BLENDERTORCP_BLENDER=/path/to/blender python3 /path/to/BlenderToRCP version
+BLENDERTORCP_BLENDER=/path/to/blender python3 /path/to/BlenderToRCP preferences get
+BLENDERTORCP_BLENDER=/path/to/blender python3 /path/to/BlenderToRCP settings list
+
+# Development checkout
+python3 /path/to/repo/Plugin --blender /path/to/blender version
+python3 /path/to/repo/Plugin --blender /path/to/blender preferences get
+python3 /path/to/repo/Plugin --blender /path/to/blender settings list
 ```
 
-Expected output — JSON with `plugin`, `blender`, and `python` keys. If this fails:
+`version` proves Blender launches. `preferences get` and `settings list` also prove the addon registered correctly. If this fails:
 
 | Error | Exit Code | Cause | Fix |
 |-------|-----------|-------|-----|
 | `Blender not found` | 2 | Wrong binary path | Correct `BLENDERTORCP_BLENDER` or use `--blender <path>` |
 | `No output from Blender` | 1 | Blender crashed on startup | Re-run with `--verbose` and inspect stderr |
 | `Failed to import command registry` | 3 | Plugin path is wrong, addon not enabled, or files are missing | Enable BlenderToRCP in Blender preferences and re-check the install path |
+| `BlenderToRCP addon preferences not available.` | 1 | Add-on is not enabled, or the path points at the wrong directory | Enable the add-on, then re-run `preferences get` against the resolved extension root |
+| `'Scene' object has no attribute 'blender_to_rcp_export_settings'` | 1 | Add-on did not register its scene properties | Enable the add-on, then re-run `settings list` or `settings get` |
 
 ### 4. Configure the shell
 
@@ -74,19 +86,23 @@ Add to the user's shell profile (`~/.zshrc`, `~/.bashrc`, or equivalent):
 
 ```bash
 export BLENDERTORCP_BLENDER="/path/to/blender"
-alias blendertorcp="python3 /path/to/Plugin"
+alias blendertorcp="python3 /path/to/BlenderToRCP"
+# Or for a repository checkout:
+# alias blendertorcp="python3 /path/to/repo/Plugin"
 ```
 
 After sourcing the profile, confirm the alias works:
 
 ```bash
 blendertorcp version
+blendertorcp preferences get
+blendertorcp settings list
 ```
 
 ### 5. Report result
 
 Print the resolved paths and confirm the setup is complete:
 - Blender binary path
-- Plugin directory path
+- Extension root or repo `Plugin/` path
 - Shell alias configured (yes/no)
-- CLI version output
+- CLI verification output

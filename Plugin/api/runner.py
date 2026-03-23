@@ -26,22 +26,14 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from Plugin.api.addon_loader import ensure_addon_loaded as _load_blendertorcp_addon
+
 OUTPUT_MARKER = "---BLENDERTORCP_JSON---"
 
 
 def _ensure_addon_loaded() -> None:
     """Enable the BlenderToRCP addon if it isn't already registered."""
-    import bpy
-
-    if hasattr(bpy.types.Scene, "blender_to_rcp_export_settings"):
-        return
-    for module_name in ("bl_ext.blender_local_addons.BlenderToRCP", "BlenderToRCP"):
-        try:
-            bpy.ops.preferences.addon_enable(module=module_name)
-        except Exception:
-            continue
-        if hasattr(bpy.types.Scene, "blender_to_rcp_export_settings"):
-            return
+    _load_blendertorcp_addon()
 
 
 def _output(data: dict) -> None:
@@ -69,8 +61,9 @@ def main() -> int:
         _output({"ok": False, "error": "Missing 'command' in request."})
         return 1
 
-    # Commands that don't need blender scene loaded
-    NO_BLEND_COMMANDS = {"version", "settings_list"}
+    # Only version is fully self-contained; the other commands need the addon
+    # registered even if they do not require a specific .blend file.
+    NO_BLEND_COMMANDS = {"version"}
 
     if command not in NO_BLEND_COMMANDS:
         _ensure_addon_loaded()
