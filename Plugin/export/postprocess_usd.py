@@ -5,6 +5,7 @@ Runs scene normalization, material rewriting, and texture preparation.
 """
 
 from .materials.rewrite import rewrite_materials
+from .materialx_orm_packing import pack_materialx_orm_textures
 from .pbr_texture_packing import pack_orm_textures
 from .usd_animation_library import author_animation_library
 from .usd_scene import normalize_scene
@@ -35,6 +36,12 @@ def process_usd_stage(usd_path: str, settings, context, diagnostics=None) -> Non
 
     if material_mode == 'SHADER_GRAPH':
         rewrite_materials(stage, settings, context, diagnostics)
+        if getattr(settings, "pack_orm_textures", False):
+            orm_resolution = int(getattr(settings, "orm_texture_resolution", "1024"))
+            pack_materialx_orm_textures(
+                stage, usd_path, context, diagnostics,
+                orm_resolution=orm_resolution,
+            )
     elif material_mode == 'PBR' and getattr(settings, "pack_orm_textures", False):
         orm_resolution = int(getattr(settings, "orm_texture_resolution", "1024"))
         pack_orm_textures(stage, usd_path, context, diagnostics, orm_resolution=orm_resolution)

@@ -615,10 +615,9 @@ class BLENDERTORCP_PT_export_panel(Panel):
             export_box.prop(settings, "filepath")
             export_box.prop(settings, "export_format")
             export_box.prop(settings, "material_mode")
-            if settings.material_mode == 'PBR':
-                export_box.prop(settings, "pack_orm_textures")
-                if settings.pack_orm_textures:
-                    export_box.prop(settings, "orm_texture_resolution")
+            export_box.prop(settings, "pack_orm_textures")
+            if settings.pack_orm_textures:
+                export_box.prop(settings, "orm_texture_resolution")
             variant_row = export_box.row()
             variant_row.enabled = False
             variant_row.prop(settings, "variant_mode")
