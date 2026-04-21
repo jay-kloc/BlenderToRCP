@@ -15,7 +15,6 @@ __all__ = [
     'usd_materials',
     'usd_scene',
     'usd_tangents',
-    'usd_assets',
     'usd_animation_library',
     'usd_textures',
     'usd_utils',

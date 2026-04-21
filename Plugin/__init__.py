@@ -19,12 +19,14 @@ if bpy is not None:
     from . import prefs as prefs_module
     from .core import variant_properties as variant_properties_module
     from .core import geometry_variant_properties as geometry_variant_properties_module
+    from .core import material_set_properties as material_set_properties_module
     from . import ui as ui_module
     from . import ops as ops_module
 else:
     prefs_module = None
     variant_properties_module = None
     geometry_variant_properties_module = None
+    material_set_properties_module = None
     ui_module = None
     ops_module = None
 
@@ -33,6 +35,7 @@ if bpy is not None and _needs_reload:
     prefs_module = importlib.reload(prefs_module)
     variant_properties_module = importlib.reload(variant_properties_module)
     geometry_variant_properties_module = importlib.reload(geometry_variant_properties_module)
+    material_set_properties_module = importlib.reload(material_set_properties_module)
     ui_module = importlib.reload(ui_module)
     ops_module = importlib.reload(ops_module)
     print("BlenderToRCP Add-on Reloaded")
@@ -59,6 +62,7 @@ def register():
     prefs_module.register()
     variant_properties_module.register()
     geometry_variant_properties_module.register()
+    material_set_properties_module.register()
     ops_module.register()
     ui_module.register()
 
@@ -86,6 +90,7 @@ def unregister():
 
     ui_module.unregister()
     ops_module.unregister()
+    material_set_properties_module.unregister()
     geometry_variant_properties_module.unregister()
     variant_properties_module.unregister()
     prefs_module.unregister()

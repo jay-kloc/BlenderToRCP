@@ -12,6 +12,7 @@ from . import nodegroup_operators
 from . import validation_operators
 from . import variant_operators
 from . import geometry_variant_operators
+from . import material_set_operators
 
 if _needs_reload:
     import importlib
@@ -21,6 +22,7 @@ if _needs_reload:
     validation_operators = importlib.reload(validation_operators)
     variant_operators = importlib.reload(variant_operators)
     geometry_variant_operators = importlib.reload(geometry_variant_operators)
+    material_set_operators = importlib.reload(material_set_operators)
 
 
 def register():
@@ -31,10 +33,12 @@ def register():
     validation_operators.register()
     variant_operators.register()
     geometry_variant_operators.register()
+    material_set_operators.register()
 
 
 def unregister():
     """Unregister all operator classes."""
+    material_set_operators.unregister()
     geometry_variant_operators.unregister()
     variant_operators.unregister()
     validation_operators.unregister()

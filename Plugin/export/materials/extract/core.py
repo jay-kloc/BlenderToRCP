@@ -4,7 +4,6 @@ Blender material extraction for RealityKit export.
 Extracts supported parameters and emits warnings for unsupported nodes.
 """
 
-import hashlib
 import os
 import re
 import tempfile
@@ -2401,8 +2400,14 @@ def _stage_image_to_temp(image, filepath: Optional[str]) -> Optional[str]:
     staging_dir = _get_staging_dir()
     extension = _guess_image_extension(image, filepath)
     basename = _sanitize_texture_name(Path(filepath).stem if filepath else image.name)
-    digest = hashlib.sha1(f"{image.name}:{filepath}".encode("utf-8")).hexdigest()[:8]
-    dest_path = staging_dir / f"{basename}_{digest}{extension}"
+    dest_path = staging_dir / f"{basename}{extension}"
+
+    # Avoid collisions in the staging directory with a numeric suffix.
+    if dest_path.exists() and cache_key not in _STAGED_IMAGE_CACHE:
+        counter = 1
+        while dest_path.exists():
+            dest_path = staging_dir / f"{basename}_{counter}{extension}"
+            counter += 1
 
     if dest_path.exists():
         _STAGED_IMAGE_CACHE[cache_key] = str(dest_path)

@@ -67,6 +67,14 @@ def create_usdz_python(usd_path: str, output_path: str, settings, diagnostics=No
         usd_arcname = usd_file.name
         usdz.write(usd_path, usd_arcname)
         
+        # Add materials directory if it exists
+        materials_dir = usd_dir / "materials"
+        if materials_dir.exists():
+            for mat_file in materials_dir.rglob("*"):
+                if mat_file.is_file():
+                    arcname = mat_file.relative_to(usd_dir)
+                    usdz.write(str(mat_file), str(arcname))
+
         # Add textures directory if it exists
         textures_dir = usd_dir / "textures"
         if textures_dir.exists():
@@ -75,17 +83,11 @@ def create_usdz_python(usd_path: str, output_path: str, settings, diagnostics=No
                     # Preserve relative path structure
                     arcname = texture_file.relative_to(usd_dir)
                     usdz.write(str(texture_file), str(arcname))
-
-        # Add staged assets directory if it exists
-        assets_dir = usd_dir / "assets"
-        if assets_dir.exists():
-            for asset_file in assets_dir.rglob("*"):
-                if asset_file.is_file():
-                    arcname = asset_file.relative_to(usd_dir)
-                    usdz.write(str(asset_file), str(arcname))
         
-        # Add any other referenced assets
-        # (This is a simplified implementation - full version would parse USD for all asset references)
+        # Add material_sets.json if it exists
+        mat_sets_json = usd_dir / "material_sets.json"
+        if mat_sets_json.exists():
+            usdz.write(str(mat_sets_json), mat_sets_json.name)
     
     print(f"USDZ created: {output_path}")
     

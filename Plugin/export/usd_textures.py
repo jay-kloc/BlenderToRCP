@@ -5,7 +5,6 @@ Ensures referenced assets are copied and paths are made relative for USDZ.
 """
 
 from pathlib import Path
-import hashlib
 
 from .usd_utils import Sdf
 
@@ -107,11 +106,10 @@ def _unique_destination_name(path: Path, used: dict, diagnostics=None, label: st
 
     stem = path.stem
     suffix = path.suffix
-    digest = hashlib.sha1(str(path).encode("utf-8")).hexdigest()[:8]
-    candidate = f"{stem}_{digest}{suffix}"
-    counter = 1
+    candidate = f"{stem}_1{suffix}"
+    counter = 2
     while candidate in used and used[candidate] != path:
-        candidate = f"{stem}_{digest}_{counter}{suffix}"
+        candidate = f"{stem}_{counter}{suffix}"
         counter += 1
     used[candidate] = path
 

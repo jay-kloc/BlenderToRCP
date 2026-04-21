@@ -183,14 +183,14 @@ class BLENDERTORCP_OT_export(Operator, ExportHelper):
                     diag
                 )
             else:
-                # Just copy/move the USD file to final location
-                import shutil
-                if temp_usd_path != self.filepath:
-                    shutil.move(temp_usd_path, self.filepath)
-            
+                # Non-USDZ: the file is already in its asset folder.
+                # Update filepath to the actual location.
+                self.filepath = temp_usd_path
+
             # Save diagnostics if enabled
+            asset_dir = Path(temp_usd_path).parent
             if prefs and prefs.enable_diagnostics:
-                diag_path = Path(self.filepath).with_suffix('.diagnostics.json')
+                diag_path = asset_dir / f"{asset_dir.name}.diagnostics.json"
                 diag.save(diag_path)
                 settings.last_diagnostics_path = str(diag_path)
 
@@ -200,8 +200,9 @@ class BLENDERTORCP_OT_export(Operator, ExportHelper):
                     self.report({'WARNING'}, warning)
                 if warning_count > 5:
                     self.report({'WARNING'}, f"{warning_count - 5} more warnings (see diagnostics)")
-            
-            self.report({'INFO'}, f"Export completed: {self.filepath}")
+
+            output_label = self.filepath if settings.export_format == 'USDZ' else str(asset_dir)
+            self.report({'INFO'}, f"Export completed: {output_label}")
             _store_last_export_settings(context, settings)
             return {'FINISHED'}
             

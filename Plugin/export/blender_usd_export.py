@@ -87,15 +87,20 @@ def export_blender_scene(context, settings, final_path: str, diagnostics=None) -
     if export_format == 'USD':
         export_format = 'USDC'
 
-    # Determine output path
+    # Determine output path — always wrap in an asset-name/ folder.
+    stem = Path(final_path).stem
     if export_format == 'USDZ':
-        # Create temporary USD file
-        temp_dir = Path(final_path).parent / ".blendertorcp_temp"
-        temp_dir.mkdir(exist_ok=True)
-        temp_usd = temp_dir / f"{Path(final_path).stem}.usdc"
+        # Create temporary USD file inside asset-name subfolder.
+        temp_dir = Path(final_path).parent / ".blendertorcp_temp" / stem
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        temp_usd = temp_dir / f"{stem}.usda"
         output_path = str(temp_usd)
     else:
-        output_path = final_path
+        # Non-USDZ: create asset-name/ folder next to user-chosen path.
+        ext = Path(final_path).suffix
+        asset_dir = Path(final_path).parent / stem
+        asset_dir.mkdir(parents=True, exist_ok=True)
+        output_path = str(asset_dir / f"{stem}{ext}")
     
     # Ensure directory exists
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
