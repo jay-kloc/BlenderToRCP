@@ -59,9 +59,6 @@ def pack_materialx_orm_textures(
                     0.5 if input_name == "roughness" else 1.0,
                 )
 
-        if len(tex_infos) < 2:
-            continue
-
         materials_info.append((
             prim, pbr_shader, tex_infos, scalar_values,
         ))
@@ -154,12 +151,19 @@ def _pack_single_material(
 
     old_prim_paths: Set[str] = set()
 
-    for input_name, info in tex_infos.items():
+    # Connect ALL three PBR inputs to the ORM separate channels,
+    # regardless of whether they originally had textures or scalars.
+    for input_name in ("ambientOcclusion", "roughness", "metallic"):
         pbr_input = pbr_shader.GetInput(input_name)
         if not pbr_input:
-            continue
+            pbr_input = pbr_shader.CreateInput(
+                input_name, Sdf.ValueTypeNames.Float
+            )
+        pbr_input.GetAttr().Clear()
         pbr_input.ConnectToSource(channel_outputs[input_name])
-        if info.get("prim_path"):
+
+        info = tex_infos.get(input_name)
+        if info and info.get("prim_path"):
             old_prim_paths.add(info["prim_path"])
 
     _collect_still_used_paths(pbr_shader, old_prim_paths, tex_infos)
