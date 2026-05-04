@@ -529,6 +529,14 @@ class BlenderToRCPExportSettings(PropertyGroup):
         update=_on_settings_changed,
     )
 
+    use_material_sets: BoolProperty(
+        name="Use Material Sets",
+        description="If checked, only export Material Sets materials and textures. "
+                    "If unchecked, only export the default materials and textures",
+        default=False,
+        update=_on_settings_changed,
+    )
+
     variant_mode: EnumProperty(
         name="Variant Mode",
         description="Choose where USD VariantSets are authored. "
@@ -618,6 +626,7 @@ class BLENDERTORCP_PT_export_panel(Panel):
             export_box.prop(settings, "pack_orm_textures")
             if settings.pack_orm_textures:
                 export_box.prop(settings, "orm_texture_resolution")
+            export_box.prop(settings, "use_material_sets")
             variant_row = export_box.row()
             variant_row.enabled = False
             variant_row.prop(settings, "variant_mode")

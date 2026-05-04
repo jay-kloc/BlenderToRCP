@@ -24,6 +24,22 @@ def _collect_bound_material_paths(stage):
     return bound
 
 
+def prune_unbound_materials(stage) -> None:
+    """Remove Material prims that are not bound to any geometry in the stage.
+
+    Run this before texture staging so orphan-material textures don't get
+    copied into the exported textures/ folder.
+    """
+    bound_paths = _collect_bound_material_paths(stage)
+    mat_prims = [
+        prim for prim in stage.Traverse()
+        if prim.IsA(UsdShade.Material)
+    ]
+    for mat_prim in mat_prims:
+        if mat_prim.GetPath() not in bound_paths:
+            stage.RemovePrim(mat_prim.GetPath())
+
+
 def externalize_materials(stage, usd_path: str, diagnostics=None) -> None:
     """Move each bound Material prim into a separate USD file under materials/.
 

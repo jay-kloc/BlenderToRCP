@@ -4,8 +4,11 @@ USD post-processing pipeline for RealityKit compatibility.
 Runs scene normalization, material rewriting, and texture preparation.
 """
 
+import shutil
+from pathlib import Path
+
 from .materials.rewrite import rewrite_materials
-from .materials.externalize import externalize_materials
+from .materials.externalize import externalize_materials, prune_unbound_materials
 from .material_sets_export import export_material_sets, rebuild_materials_from_sets
 from .materialx_orm_packing import pack_materialx_orm_textures
 from .pbr_texture_packing import pack_orm_textures
@@ -29,6 +32,9 @@ def process_usd_stage(usd_path: str, settings, context, diagnostics=None) -> Non
     stage = Usd.Stage.Open(usd_path, Usd.Stage.LoadAll)
     if not stage:
         raise RuntimeError(f"Failed to open USD stage: {usd_path}")
+
+    # Clean prior export artifacts so the asset folder reflects only this run.
+    _clean_export_artifacts(usd_path)
 
     normalize_scene(stage, settings)
     author_mesh_tangents(stage, context, settings, diagnostics)
@@ -62,12 +68,40 @@ def process_usd_stage(usd_path: str, settings, context, diagnostics=None) -> Non
 
     author_animation_library(stage, settings, diagnostics)
 
-    prepare_textures(stage, usd_path, settings, diagnostics)
-    externalize_materials(stage, usd_path, diagnostics)
-    export_material_sets(stage, usd_path, settings, context, diagnostics)
-    rebuild_materials_from_sets(stage, usd_path, context, diagnostics)
+    # Drop materials that aren't bound to any geometry so their textures
+    # won't be staged.  Blender's USD exporter dumps every scene material
+    # by default, including unused ones.
+    prune_unbound_materials(stage)
+
+    use_material_sets = bool(getattr(settings, "use_material_sets", False))
+
+    if use_material_sets:
+        # Material sets mode: only export material sets materials and textures.
+        # Default textures from the Blender scene are NOT staged.
+        externalize_materials(stage, usd_path, diagnostics)
+        export_material_sets(stage, usd_path, settings, context, diagnostics)
+        rebuild_materials_from_sets(stage, usd_path, context, diagnostics)
+    else:
+        # Default mode: only export the default materials and textures.
+        prepare_textures(stage, usd_path, settings, diagnostics)
+        externalize_materials(stage, usd_path, diagnostics)
 
     stage.Save()
 
     if diagnostics:
         diagnostics.add_warning("USD stage post-processed for RealityKit compatibility")
+
+
+def _clean_export_artifacts(usd_path: str) -> None:
+    """Remove stale materials/, textures/, and material_sets.json from prior exports."""
+    usd_dir = Path(usd_path).parent
+    for sub in ("materials", "textures"):
+        target = usd_dir / sub
+        if target.is_dir():
+            shutil.rmtree(target, ignore_errors=True)
+    json_file = usd_dir / "material_sets.json"
+    if json_file.is_file():
+        try:
+            json_file.unlink()
+        except OSError:
+            pass
