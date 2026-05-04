@@ -42,14 +42,19 @@ def process_usd_stage(usd_path: str, settings, context, diagnostics=None) -> Non
     material_mode = getattr(settings, "material_mode", "SHADER_GRAPH")
 
     orm_resolution = int(getattr(settings, "orm_texture_resolution", "1024"))
+    use_material_sets = bool(getattr(settings, "use_material_sets", False))
 
     if material_mode == 'SHADER_GRAPH':
         rewrite_materials(stage, settings, context, diagnostics)
-        pack_materialx_orm_textures(
-            stage, usd_path, context, diagnostics,
-            orm_resolution=orm_resolution,
-        )
-    elif material_mode == 'PBR':
+        # Skip ORM packing for bound materials when material sets drive
+        # the final .usda — the rebuild overwrites those materials so
+        # their per-material ORM textures would be orphaned.
+        if not use_material_sets:
+            pack_materialx_orm_textures(
+                stage, usd_path, context, diagnostics,
+                orm_resolution=orm_resolution,
+            )
+    elif material_mode == 'PBR' and not use_material_sets:
         pack_orm_textures(stage, usd_path, context, diagnostics, orm_resolution=orm_resolution)
 
     variant_mode = getattr(settings, "variant_mode", "RCP")
@@ -72,8 +77,6 @@ def process_usd_stage(usd_path: str, settings, context, diagnostics=None) -> Non
     # won't be staged.  Blender's USD exporter dumps every scene material
     # by default, including unused ones.
     prune_unbound_materials(stage)
-
-    use_material_sets = bool(getattr(settings, "use_material_sets", False))
 
     if use_material_sets:
         # Material sets mode: only export material sets materials and textures.
