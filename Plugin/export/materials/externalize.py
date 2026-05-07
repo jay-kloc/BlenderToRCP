@@ -101,7 +101,7 @@ def externalize_materials(stage, usd_path: str, diagnostics=None) -> None:
         # (DiffuseTexture, NormalTexture, ORMTexture) so they are editable
         # at runtime in RealityKit.  This runs after ORM packing so the
         # graph already uses a single ORM image node.
-        _promote_texture_inputs(ext_layer, mat_path)
+        _promote_texture_inputs(ext_layer, mat_path, usd_dir)
 
         ext_layer.Save()
 
@@ -177,20 +177,25 @@ _PBR_INPUT_TO_IFACE = {
 }
 
 
-def _promote_texture_inputs(layer, mat_path) -> None:
+def _promote_texture_inputs(layer, mat_path, usd_dir=None) -> None:
     """Create Material-level interface inputs on the external layer.
 
     Traces PBR shader input connections to find texture ``file`` attributes,
     then creates ``DiffuseTexture``, ``NormalTexture``, ``ORMTexture``
     inputs on the Material prim and connects the texture nodes to them.
+
+    Absolute texture paths are normalized: the file is copied into
+    ``<usd_dir>/textures/`` and the interface input uses the relative
+    path ``../textures/<filename>`` (the material file lives in
+    ``materials/`` so it must step out one level).
     """
     try:
-        _promote_texture_inputs_impl(layer, mat_path)
+        _promote_texture_inputs_impl(layer, mat_path, usd_dir)
     except Exception:
         pass
 
 
-def _promote_texture_inputs_impl(layer, mat_path) -> None:
+def _promote_texture_inputs_impl(layer, mat_path, usd_dir=None) -> None:
     mat_spec = layer.GetPrimAtPath(mat_path)
     if not mat_spec:
         return
@@ -211,7 +216,6 @@ def _promote_texture_inputs_impl(layer, mat_path) -> None:
 
     # For each PBR input, walk the connection chain to find the image
     # node's ``file`` attribute and its asset path.
-    # path_str → (iface_name, [(child_spec, attr_name)])
     collected = {}  # asset_path → iface_name
     file_attrs = []  # [(attr_spec holding file, asset_path)]
 
@@ -235,6 +239,12 @@ def _promote_texture_inputs_impl(layer, mat_path) -> None:
     if not collected:
         return
 
+    # Normalize absolute paths into ``../textures/<filename>`` and copy
+    # the source file into the textures folder if needed.
+    normalized = {}  # original asset_path → final relative path
+    for asset_path in list(collected.keys()):
+        normalized[asset_path] = _normalize_texture_path(asset_path, usd_dir)
+
     # Create interface inputs on the material spec.
     created = {}  # iface_name → Sdf.Path to the interface input
     for asset_path, iface_name in collected.items():
@@ -246,7 +256,7 @@ def _promote_texture_inputs_impl(layer, mat_path) -> None:
             input_attr = Sdf.AttributeSpec(
                 mat_spec, input_attr_name, Sdf.ValueTypeNames.Asset
             )
-        input_attr.default = Sdf.AssetPath(asset_path)
+        input_attr.default = Sdf.AssetPath(normalized[asset_path])
         created[iface_name] = mat_path.AppendProperty(input_attr_name)
 
     # Connect each texture node's file input to the interface input
@@ -258,6 +268,39 @@ def _promote_texture_inputs_impl(layer, mat_path) -> None:
         iface_path = created[iface_name]
         file_attr.connectionPathList.prependedItems = [iface_path]
         file_attr.ClearDefaultValue()
+
+
+def _normalize_texture_path(asset_path: str, usd_dir) -> str:
+    """Return a ``../textures/<filename>`` path, copying the file if needed.
+
+    - ``../textures/foo.png``  → unchanged
+    - ``textures/foo.png``     → ``../textures/foo.png``
+    - absolute ``/abs/foo.png`` → copy to ``<usd_dir>/textures/foo.png`` and
+      return ``../textures/foo.png``
+    - anything else            → returned unchanged
+    """
+    if not asset_path:
+        return asset_path
+    if asset_path.startswith("../textures/"):
+        return asset_path
+    if asset_path.startswith("textures/"):
+        return f"../{asset_path}"
+
+    src = Path(asset_path)
+    if not src.is_absolute() or not usd_dir:
+        return asset_path
+
+    try:
+        textures_dir = Path(usd_dir) / "textures"
+        textures_dir.mkdir(exist_ok=True)
+        dest = textures_dir / src.name
+        if src.exists() and not dest.exists():
+            import shutil
+            shutil.copy2(src, dest)
+    except Exception:
+        pass
+
+    return f"../textures/{src.name}"
 
 
 def _trace_to_file_attr(layer, mat_path, attr_spec):
