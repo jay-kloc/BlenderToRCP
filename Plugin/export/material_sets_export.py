@@ -270,7 +270,10 @@ def rebuild_materials_from_sets(
             if first_set.diffuses:
                 first_diffuse_file = _find_staged(first_set.diffuses[0].image, textures_dir)
 
-            # Build material_data for the graph builder.
+            # Build material_data with only baseColor + normal.  The ORM
+            # is wired manually below as a single ORM_Image + ORM_Separate
+            # node feeding AO/Roughness/Metallic, matching the structure
+            # produced by pack_materialx_orm_textures.
             material_data: Dict[str, Any] = {"type": "principled"}
 
             if first_diffuse_file:
@@ -281,20 +284,6 @@ def rebuild_materials_from_sets(
                 material_data["normal_texture"] = str(textures_dir / normal_file)
                 material_data["normal_texture_colorspace"] = "raw"
 
-            orm_path = textures_dir / orm_file
-            if orm_path.exists():
-                # ORM: R=AO, G=Roughness, B=Metallic
-                orm_abs = str(orm_path)
-                material_data["ao_texture"] = orm_abs
-                material_data["ao_texture_channel"] = "r"
-                material_data["ao_texture_colorspace"] = "raw"
-                material_data["roughness_texture"] = orm_abs
-                material_data["roughness_texture_channel"] = "g"
-                material_data["roughness_texture_colorspace"] = "raw"
-                material_data["metallic_texture"] = orm_abs
-                material_data["metallic_texture_channel"] = "b"
-                material_data["metallic_texture_colorspace"] = "raw"
-
             try:
                 graph = builder.build_pbr_material(material_data)
             except Exception as exc:
@@ -304,10 +293,25 @@ def rebuild_materials_from_sets(
                     )
                 continue
 
-            # Overwrite the .usda file.
+            orm_path = textures_dir / orm_file
+            orm_relative = f"../textures/{orm_file}" if orm_path.exists() else None
+
+            # Overwrite the .usda file.  externalize_materials may have
+            # already loaded this layer into USD's registry, so prefer
+            # Find() to reuse it; otherwise create new.
             try:
-                layer = Sdf.Layer.CreateNew(str(mat_file))
+                layer = Sdf.Layer.Find(str(mat_file))
+                if layer is not None:
+                    layer.Clear()
+                else:
+                    if mat_file.exists():
+                        mat_file.unlink()
+                    layer = Sdf.Layer.CreateNew(str(mat_file))
                 if not layer:
+                    if diagnostics:
+                        diagnostics.add_warning(
+                            f"Could not create material layer for '{mat_name}'"
+                        )
                     continue
                 tmp_stage = Usd.Stage.Open(layer)
                 prim_sdf_path = Sdf.Path(mat_prim_path)
@@ -315,12 +319,85 @@ def rebuild_materials_from_sets(
                 create_materialx_material(
                     tmp_stage, mat_prim_path, mat_name, graph, manifest, diagnostics,
                 )
+                if orm_relative:
+                    _wire_orm_to_pbr(tmp_stage, mat_prim_path, orm_relative)
+
+                # Re-promote texture file paths to Material-level interface
+                # inputs (DiffuseTexture, NormalTexture, ORMTexture).  We
+                # just re-authored the material from scratch, so any
+                # interface inputs that existed from externalize were
+                # cleared with the rest of the layer.
+                from .materials.externalize import _promote_texture_inputs
+                _promote_texture_inputs(layer, prim_sdf_path, usd_dir)
+
                 tmp_stage.Save()
             except Exception as exc:
+                import traceback
+                traceback.print_exc()
                 if diagnostics:
                     diagnostics.add_warning(
                         f"Failed to write material for slot '{slot_sets.slot_name}': {exc}"
                     )
+
+
+def _wire_orm_to_pbr(stage, material_path: str, orm_relative: str) -> None:
+    """Add ORM_Image + ORM_Separate and wire AO/Roughness/Metallic to it."""
+    material_prim = stage.GetPrimAtPath(material_path)
+    if not material_prim or not material_prim.IsValid():
+        return
+
+    pbr_shader = None
+    for child in material_prim.GetChildren():
+        if child.GetTypeName() != "Shader":
+            continue
+        shader = UsdShade.Shader(child)
+        sid = shader.GetIdAttr().Get()
+        if sid and "surfaceshader" in str(sid).lower():
+            pbr_shader = shader
+            break
+    if not pbr_shader:
+        return
+
+    # ORM_Image: ND_image_color3 reading the packed PNG.
+    orm_image_path = f"{material_path}/ORM_Image"
+    orm_prim = stage.DefinePrim(orm_image_path, "Shader")
+    orm_shader = UsdShade.Shader(orm_prim)
+    orm_shader.CreateIdAttr("ND_image_color3")
+    orm_shader.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(
+        Sdf.AssetPath(orm_relative)
+    )
+    orm_out = orm_shader.CreateOutput("out", Sdf.ValueTypeNames.Color3f)
+
+    # ORM_Separate: ND_separate3_color3 splitting into R/G/B.
+    sep_path = f"{material_path}/ORM_Separate"
+    sep_prim = stage.DefinePrim(sep_path, "Shader")
+    sep_shader = UsdShade.Shader(sep_prim)
+    sep_shader.CreateIdAttr("ND_separate3_color3")
+    sep_in = sep_shader.CreateInput("in", Sdf.ValueTypeNames.Color3f)
+    sep_in.ConnectToSource(orm_out)
+    sep_outr = sep_shader.CreateOutput("outr", Sdf.ValueTypeNames.Float)
+    sep_outg = sep_shader.CreateOutput("outg", Sdf.ValueTypeNames.Float)
+    sep_outb = sep_shader.CreateOutput("outb", Sdf.ValueTypeNames.Float)
+
+    channel_outputs = {
+        "ambientOcclusion": sep_outr,
+        "roughness": sep_outg,
+        "metallic": sep_outb,
+    }
+
+    pbr_prim = pbr_shader.GetPrim()
+    for input_name, source_output in channel_outputs.items():
+        attr_name = f"inputs:{input_name}"
+        had_value = (
+            pbr_prim.HasAttribute(attr_name)
+            and pbr_prim.GetAttribute(attr_name).HasAuthoredValue()
+        )
+        if had_value:
+            pbr_prim.GetAttribute(attr_name).Clear()
+        pbr_input = pbr_shader.CreateInput(
+            input_name, Sdf.ValueTypeNames.Float
+        )
+        pbr_input.ConnectToSource(source_output)
 
 
 def _map_slots_to_materials(stage, context) -> Dict[str, tuple]:

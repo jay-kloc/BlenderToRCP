@@ -153,13 +153,22 @@ def _pack_single_material(
 
     # Connect ALL three PBR inputs to the ORM separate channels,
     # regardless of whether they originally had textures or scalars.
+    # Important: Clear() removes the attribute spec entirely, so we
+    # only clear when the input already had an authored scalar value,
+    # and we re-create the input afterwards so ConnectToSource has a
+    # valid attribute to attach the connection to.
+    pbr_prim = pbr_shader.GetPrim()
     for input_name in ("ambientOcclusion", "roughness", "metallic"):
-        pbr_input = pbr_shader.GetInput(input_name)
-        if not pbr_input:
-            pbr_input = pbr_shader.CreateInput(
-                input_name, Sdf.ValueTypeNames.Float
-            )
-        pbr_input.GetAttr().Clear()
+        attr_name = f"inputs:{input_name}"
+        had_value = (
+            pbr_prim.HasAttribute(attr_name)
+            and pbr_prim.GetAttribute(attr_name).HasAuthoredValue()
+        )
+        if had_value:
+            pbr_prim.GetAttribute(attr_name).Clear()
+        pbr_input = pbr_shader.CreateInput(
+            input_name, Sdf.ValueTypeNames.Float
+        )
         pbr_input.ConnectToSource(channel_outputs[input_name])
 
         info = tex_infos.get(input_name)
